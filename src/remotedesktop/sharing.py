@@ -35,13 +35,16 @@ from remotedesktop.config import (
 )
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop.input_injection import InputInjector
-from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
+from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
 from remotedesktop import db, tls
 
 DEFAULT_FPS = 10
 JPEG_QUALITY = 70
 # Skip sending to a client whose socket buffer is this far behind.
 _MAX_SEND_BACKLOG = 8 * 1024 * 1024
+# Until a client passes the approval handshake it may only send small
+# messages (a hello is well under 1 KB); the cap is lifted on admission.
+_PREAUTH_MAX_PAYLOAD = 64 * 1024
 
 
 def _peer(sock: QSslSocket) -> str:
@@ -79,6 +82,13 @@ class ShareServer(QObject):
         self._controllers: set[MessageStream] = set()
         self._stream_key: dict[MessageStream, tuple[str, str, str]] = {}
         self._revoked: set[str] = set()
+        # Streams whose approval prompt is currently open (repeat hellos are
+        # ignored meanwhile) and streams whose terminal inventory state
+        # (denied/refused) is already recorded, so _drop must not overwrite it.
+        self._prompting: set[MessageStream] = set()
+        self._final: set[MessageStream] = set()
+        # What each controlling stream currently holds down: (buttons, vks).
+        self._pressed: dict[MessageStream, tuple[set[str], set[int]]] = {}
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -113,11 +123,17 @@ class ShareServer(QObject):
             # (covers streams that never completed the hello, too).
             stream.socket.blockSignals(True)
             stream.socket.abort()
+            self._release_input(stream)
+            stream.socket.deleteLater()
+            stream.deleteLater()
         had_clients = bool(self._streams)
         self._streams.clear()
         self._all_streams.clear()
         self._controllers.clear()
         self._stream_key.clear()
+        self._prompting.clear()
+        self._final.clear()
+        self._pressed.clear()
         if had_clients:
             self.clientCountChanged.emit(0)
         self._server.close()
@@ -130,7 +146,7 @@ class ShareServer(QObject):
                 f"Incoming TLS connection from {_peer(sock)} "
                 f"(encrypted={sock.isEncrypted()}) — waiting for hello"
             )
-            stream = MessageStream(sock, self)
+            stream = MessageStream(sock, self, max_payload=_PREAUTH_MAX_PAYLOAD)
             self._all_streams.add(stream)
             sock.disconnected.connect(lambda s=stream: self._drop(s))
             sock.errorOccurred.connect(
@@ -150,7 +166,11 @@ class ShareServer(QObject):
                 self.status.emit(f"Clipboard update received from {_peer(stream.socket)}")
                 self._clipboard.apply(message)
             return
-        if message.get("type") != "hello" or stream in self._streams:
+        if (
+            message.get("type") != "hello"
+            or stream in self._streams
+            or stream in self._prompting
+        ):
             return
         self._handle_hello(stream, message)
 
@@ -201,6 +221,7 @@ class ShareServer(QObject):
                 f"Denying {peer}: incompatible protocol version {message.get('version')}"
             )
             self._emit_peer(stream, "denied")
+            self._final.add(stream)
             stream.send_json({"type": "denied", "reason": "incompatible protocol version"})
             stream.socket.disconnectFromHost()
             return
@@ -213,6 +234,7 @@ class ShareServer(QObject):
         presented = message.get("token")
         if existing and isinstance(presented, str) and hmac.compare_digest(existing, presented):
             self.status.emit(f'"{client_name}" authenticated with its paired token')
+            self._revoked.discard(client_id)
             self._emit_peer(stream, "authenticated")
             self._admit(stream, client_name, {"type": "welcome", "name": socket_module.gethostname()})
             return
@@ -223,14 +245,26 @@ class ShareServer(QObject):
             )
         else:
             self.status.emit(f'"{client_name}" is new — asking for permission')
-        if not self._approve_client(client_id, client_name):
+        # The approval prompt is modal: a nested event loop runs while it is
+        # open, so this stream can disconnect (and _drop can run) meanwhile.
+        self._prompting.add(stream)
+        try:
+            approved = self._approve_client(client_id, client_name)
+        finally:
+            self._prompting.discard(stream)
+        if stream not in self._all_streams:
+            self.status.emit(f'"{client_name}" disconnected while waiting for permission')
+            return
+        if not approved:
             self.status.emit(f'Permission for "{client_name}" refused — denying')
             self._emit_peer(stream, "refused")
+            self._final.add(stream)
             stream.send_json({"type": "denied", "reason": "connection refused by user"})
             stream.socket.disconnectFromHost()
             return
         # Reissue the existing token if any (so the client re-stores it); else pair anew.
         token = existing or self._paired.pair(client_id)
+        self._revoked.discard(client_id)
         self.status.emit(f'Permission granted — "{client_name}" paired')
         self._emit_peer(stream, "paired")
         self._admit(
@@ -240,6 +274,7 @@ class ShareServer(QObject):
         )
 
     def _admit(self, stream: MessageStream, client_name: str, welcome: dict) -> None:
+        stream.max_payload = MAX_PAYLOAD  # pre-auth cap lifted once approved
         stream.send_json(welcome)
         self._streams.append(stream)
         self.clientCountChanged.emit(len(self._streams))
@@ -269,6 +304,8 @@ class ShareServer(QObject):
                     pressed = bool(message.get("pressed"))
                     name = str(message.get("button"))
                     self._injector.button(x, y, name, pressed)
+                    buttons, _keys = self._pressed.setdefault(stream, (set(), set()))
+                    (buttons.add if pressed else buttons.discard)(name)
                     self.status.emit(f"Injected {name} button {'down' if pressed else 'up'}")
                 case "wheel":
                     self._injector.wheel(x, y, int(message.get("dy", 0)))
@@ -276,9 +313,26 @@ class ShareServer(QObject):
                     pressed = bool(message.get("pressed"))
                     vk = int(message.get("vk", 0))
                     self._injector.key(vk, pressed)
+                    _buttons, keys = self._pressed.setdefault(stream, (set(), set()))
+                    (keys.add if pressed else keys.discard)(vk)
                     self.status.emit(f"Injected key vk={vk} {'down' if pressed else 'up'}")
         except (TypeError, ValueError) as error:
             self.status.emit(f"Ignoring malformed input message: {error}")
+
+    def _release_input(self, stream: MessageStream) -> None:
+        """Release whatever the stream still holds down, so a client that
+        vanishes mid-drag or mid-keystroke doesn't leave input stuck."""
+        buttons, keys = self._pressed.pop(stream, (set(), set()))
+        for name in sorted(buttons):
+            # No coordinates: release at the cursor's current position.
+            self._injector.button(None, None, name, False)
+        for vk in sorted(keys):
+            self._injector.key(vk, False)
+        if buttons or keys:
+            self.status.emit(
+                f"Released {len(buttons)} mouse button(s) and {len(keys)} key(s) "
+                "still held by the disconnected client"
+            )
 
     def _broadcast_clipboard(self, payload: dict) -> None:
         if not self._streams:
@@ -291,10 +345,19 @@ class ShareServer(QObject):
     def _drop(self, stream: MessageStream) -> None:
         self._controllers.discard(stream)
         self._all_streams.discard(stream)
+        self._prompting.discard(stream)
+        self._release_input(stream)
+        final = stream in self._final
+        self._final.discard(stream)
         if stream in self._stream_key:
             client_id = self._stream_key[stream][0]
-            self._emit_peer(stream, "revoked" if client_id in self._revoked else "disconnected")
+            if not final:  # a terminal state (denied/refused) is already recorded
+                self._emit_peer(
+                    stream, "revoked" if client_id in self._revoked else "disconnected"
+                )
             del self._stream_key[stream]
+        stream.socket.deleteLater()
+        stream.deleteLater()
         if stream not in self._streams:
             self.status.emit("Connection closed before completing hello")
             return
@@ -367,6 +430,7 @@ class ShareClient(QObject):
         self._stream.frameReceived.connect(self._on_frame)
 
     def connect_to(self, host: str, port: int) -> None:
+        self._socket.abort()  # drop any previous connection or attempt
         self._got_first_frame = False
         self._server_key = f"{host}:{port}"
         record = self._known.get(self._server_key) if self._known else None
@@ -402,7 +466,7 @@ class ShareClient(QObject):
         if record and record.get("fingerprint") and record["fingerprint"] != fingerprint:
             self.status.emit(
                 "WARNING: server certificate fingerprint changed since last pairing "
-                "(continuing anyway; re-pairing)"
+                "(continuing anyway)"
             )
         self.status.emit(f"TLS established (server cert {fingerprint[:16]}…) — sending hello")
         hello = {
@@ -424,9 +488,20 @@ class ShareClient(QObject):
             case "welcome":
                 name = str(message.get("name", ""))
                 token = message.get("token")
-                if isinstance(token, str) and self._known is not None:
-                    self._known.remember(self._server_key, self._server_fingerprint, token)
-                    self.status.emit("Paired with server — token stored for future connections")
+                if self._known is not None:
+                    if isinstance(token, str):
+                        self._known.remember(self._server_key, self._server_fingerprint, token)
+                        self.status.emit("Paired with server — token stored for future connections")
+                    else:
+                        # Token reconnect: refresh the pinned fingerprint if the
+                        # server's certificate changed, so the change warning
+                        # doesn't repeat on every future connection.
+                        record = self._known.get(self._server_key)
+                        if record and record.get("fingerprint") != self._server_fingerprint:
+                            self._known.remember(
+                                self._server_key, self._server_fingerprint, record["token"]
+                            )
+                            self.status.emit("Stored server certificate fingerprint updated")
                 self.status.emit(
                     f'Server "{name}" accepted the connection — waiting for first frame'
                 )

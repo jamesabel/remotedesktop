@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
+    QFocusEvent,
     QImage,
     QKeyEvent,
     QMouseEvent,
@@ -29,6 +30,11 @@ class ViewerWidget(QWidget):
         super().__init__(parent)
         self._frame: QPixmap | None = None
         self._message = "Not connected"
+        # Buttons/keys currently held, so releases can be forwarded even when
+        # they happen outside the frame or when the widget loses focus —
+        # otherwise the server would keep them pressed forever.
+        self._pressed_buttons: set[str] = set()
+        self._pressed_keys: set[int] = set()
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -44,6 +50,8 @@ class ViewerWidget(QWidget):
     def clear(self, message: str = "Not connected") -> None:
         self._frame = None
         self._message = message
+        self._pressed_buttons.clear()
+        self._pressed_keys.clear()
         self.update()
 
     def _display_rect(self) -> QRectF:
@@ -54,17 +62,26 @@ class ViewerWidget(QWidget):
         y = (self.height() - size.height()) / 2
         return QRectF(x, y, size.width(), size.height())
 
-    def _normalized(self, pos: QPointF) -> tuple[float, float] | None:
-        """Map a widget position to 0..1 over the frame, or None if outside it."""
+    def _normalized(self, pos: QPointF, *, clamp: bool = False) -> tuple[float, float] | None:
+        """Map a widget position to 0..1 over the frame, or None if outside it.
+
+        With `clamp=True` a position outside the frame maps to the nearest
+        frame edge instead of None (used for button releases, which must
+        reach the server even when the drag ended past the frame).
+        """
         if self._frame is None:
             return None
         rect = self._display_rect()
-        if not rect.contains(pos) or rect.width() <= 0 or rect.height() <= 0:
+        if rect.width() <= 0 or rect.height() <= 0:
             return None
-        return (
-            (pos.x() - rect.x()) / rect.width(),
-            (pos.y() - rect.y()) / rect.height(),
-        )
+        if not clamp and not rect.contains(pos):
+            return None
+        x = (pos.x() - rect.x()) / rect.width()
+        y = (pos.y() - rect.y()) / rect.height()
+        if clamp:
+            x = min(1.0, max(0.0, x))
+            y = min(1.0, max(0.0, y))
+        return (x, y)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         coords = self._normalized(event.position())
@@ -73,12 +90,24 @@ class ViewerWidget(QWidget):
 
     def _button_event(self, event: QMouseEvent, pressed: bool) -> None:
         name = _BUTTON_NAMES.get(event.button())
-        coords = self._normalized(event.position())
-        if name is not None and coords is not None:
-            self.inputEvent.emit(
-                {"action": "button", "button": name, "pressed": pressed,
-                 "x": coords[0], "y": coords[1]}
-            )
+        if name is None:
+            return
+        if pressed:
+            coords = self._normalized(event.position())
+            if coords is None:
+                return
+            self._pressed_buttons.add(name)
+        else:
+            if name not in self._pressed_buttons:
+                return
+            self._pressed_buttons.discard(name)
+            coords = self._normalized(event.position(), clamp=True)
+            if coords is None:  # frame gone mid-drag; server releases on drop
+                return
+        self.inputEvent.emit(
+            {"action": "button", "button": name, "pressed": pressed,
+             "x": coords[0], "y": coords[1]}
+        )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.setFocus()
@@ -97,14 +126,39 @@ class ViewerWidget(QWidget):
 
     def _key_event(self, event: QKeyEvent, pressed: bool) -> None:
         vk = event.nativeVirtualKey()
-        if vk:
-            self.inputEvent.emit({"action": "key", "vk": int(vk), "pressed": pressed})
+        if not vk:
+            return
+        vk = int(vk)
+        if pressed:
+            self._pressed_keys.add(vk)
+        else:
+            self._pressed_keys.discard(vk)
+        self.inputEvent.emit({"action": "key", "vk": vk, "pressed": pressed})
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         self._key_event(event, True)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         self._key_event(event, False)
+
+    def release_input(self) -> None:
+        """Emit release events for everything currently held down.
+
+        Button releases carry no coordinates, so the server releases them at
+        the cursor's current position instead of jerking the pointer.
+        """
+        for name in sorted(self._pressed_buttons):
+            self.inputEvent.emit({"action": "button", "button": name, "pressed": False})
+        self._pressed_buttons.clear()
+        for vk in sorted(self._pressed_keys):
+            self.inputEvent.emit({"action": "key", "vk": vk, "pressed": False})
+        self._pressed_keys.clear()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        # Alt-Tab (or any focus loss) means key/button releases will go to
+        # another window; release everything on the server side first.
+        self.release_input()
+        super().focusOutEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

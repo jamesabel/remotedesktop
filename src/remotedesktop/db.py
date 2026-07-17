@@ -1,6 +1,6 @@
 """The single SQLite database that backs all persistence.
 
-One database file under %APPDATA%/remotedesktop holds every persistent table:
+One database file under %LOCALAPPDATA%/remotedesktop holds every persistent table:
 settings (a key/value store, including this client's identity), the server's
 paired clients, the client's known servers, and the connection inventory. Pass
 `None` for an in-memory database (used by tests).

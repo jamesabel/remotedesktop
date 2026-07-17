@@ -69,7 +69,11 @@ class DiscoveryResponder:
         if self._thread is not None:
             raise RuntimeError("responder already started")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind((self._bind_host, self._discovery_port))
+        try:
+            sock.bind((self._bind_host, self._discovery_port))
+        except OSError:
+            sock.close()
+            raise
         sock.settimeout(0.25)
         self._socket = sock
         self._running.set()

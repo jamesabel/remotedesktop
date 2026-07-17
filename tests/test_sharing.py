@@ -2,7 +2,7 @@ import time
 
 from PySide6.QtCore import QEventLoop
 
-from remotedesktop import db
+from remotedesktop import db, tls
 from remotedesktop.config import KnownServers, PairedClients
 from remotedesktop.sharing import ShareClient, ShareServer
 
@@ -143,6 +143,115 @@ def test_refused_client_is_denied_and_not_paired(qapp, credentials, tmp_path):
     finally:
         client.close()
         server.close()
+
+
+def test_disconnect_during_approval_is_not_admitted(qapp, credentials, tmp_path):
+    client = make_client(tmp_path)
+
+    def approve(cid, name):
+        # Simulate the user answering the (modal, nested-event-loop) prompt
+        # only after the client already gave up and disconnected.
+        client.close()
+        pump(qapp, lambda: not server._all_streams)
+        return True
+
+    server = make_server(credentials, tmp_path, approve=approve)
+    counts, statuses = [], []
+    server.clientCountChanged.connect(counts.append)
+    server.status.connect(statuses.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: any("disconnected while waiting" in s for s in statuses))
+        assert counts == []  # the dead stream was never admitted
+        assert server._streams == []
+        assert not server._timer.isActive()
+    finally:
+        client.close()
+        server.close()
+
+
+def test_reapproved_client_disconnect_is_not_reported_revoked(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    events = []
+    server.peerEvent.connect(lambda e: events.append(e["event"]))
+    client = client2 = None
+    try:
+        client = make_client(tmp_path)
+        names = []
+        client.connected.connect(names.append)
+        client.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: names)
+
+        server.revoke_client(CLIENT_ID)
+        pump(qapp, lambda: "revoked" in events)
+
+        # Re-approve: a later ordinary disconnect must not read "revoked".
+        client2 = make_client(tmp_path)
+        names2 = []
+        client2.connected.connect(names2.append)
+        client2.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: names2)
+        client2.close()
+        pump(qapp, lambda: events[-1] in ("disconnected", "revoked"))
+        assert events[-1] == "disconnected"
+    finally:
+        if client2 is not None:
+            client2.close()
+        if client is not None:
+            client.close()
+        server.close()
+
+
+def test_refused_state_is_not_overwritten_by_disconnect(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: False)
+    events = []
+    server.peerEvent.connect(lambda e: events.append(e["event"]))
+    client = make_client(tmp_path)
+    denials = []
+    client.denied.connect(denials.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: denials)
+        pump(qapp, lambda: not server._all_streams)  # server processed the drop
+        assert events == ["attempt", "refused"]
+    finally:
+        client.close()
+        server.close()
+
+
+def test_stored_fingerprint_updates_when_server_cert_changes(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    port = server.port
+    client = make_client(tmp_path)
+    names = []
+    client.connected.connect(names.append)
+    client.connect_to("127.0.0.1", port)
+    pump(qapp, lambda: names)
+    client.close()
+    server.close()
+    pump(qapp, lambda: True, timeout=0.3)
+
+    # Same server database (the token survives) but a brand-new certificate.
+    new_credentials = tls.ephemeral_credentials()
+    prompts = []
+    server2 = ShareServer(
+        approve_client=lambda *_: prompts.append(True) or True,
+        credentials=new_credentials,
+        paired=PairedClients(db.connect(tmp_path / "server.db")),
+    )
+    assert server2.listen(port)
+    client2 = make_client(tmp_path)
+    names2 = []
+    client2.connected.connect(names2.append)
+    client2.connect_to("127.0.0.1", port)
+    try:
+        pump(qapp, lambda: names2)
+        assert prompts == []  # the paired token still authenticates
+        stored = KnownServers(db.connect(tmp_path / "client.db")).get(f"127.0.0.1:{port}")
+        assert stored["fingerprint"] == tls.certificate_fingerprint(new_credentials[0])
+    finally:
+        client2.close()
+        server2.close()
 
 
 def test_server_reports_phases_in_status(qapp, credentials, tmp_path):

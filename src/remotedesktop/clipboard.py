@@ -16,7 +16,7 @@ flag would already have been cleared.
 import base64
 import hashlib
 
-from PySide6.QtCore import QBuffer, QObject, Signal
+from PySide6.QtCore import QBuffer, QMimeData, QObject, Signal
 from PySide6.QtGui import QClipboard, QGuiApplication, QImage
 
 
@@ -71,15 +71,21 @@ class ClipboardSync(QObject):
                 image = QImage.fromData(base64.b64decode(encoded), "PNG")
             except (ValueError, TypeError):
                 image = None
+        if image is not None and image.isNull():
+            image = None
         signature = (text, _image_hash(image))
         if signature == self._last_signature or signature == (None, None):
             return
         self._last_signature = signature
+        # One QMimeData carrying both representations, so a payload with text
+        # and an image keeps both halves on the receiving clipboard.
+        mime = QMimeData()
+        if text is not None:
+            mime.setText(text)
+        if image is not None:
+            mime.setImageData(image)
         self._applying = True
         try:
-            if image is not None and not image.isNull():
-                self._clipboard.setImage(image)
-            elif text is not None:
-                self._clipboard.setText(text)
+            self._clipboard.setMimeData(mime)
         finally:
             self._applying = False

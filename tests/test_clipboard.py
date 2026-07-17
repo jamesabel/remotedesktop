@@ -74,6 +74,21 @@ def test_clipboard_from_unapproved_stream_is_ignored(qapp, credentials, tmp_path
         server.close()
 
 
+def test_large_clipboard_passes_after_pairing(qapp, credentials, tmp_path):
+    # The server caps message size until the handshake completes; an admitted
+    # client must be able to send more than that pre-auth cap.
+    server_cb, client_cb = FakeClipboard(), FakeClipboard()
+    server, client = connected_pair(qapp, credentials, tmp_path, server_cb, client_cb)
+    try:
+        big = "x" * (256 * 1024)
+        client_cb.local_copy({"text": big})
+        pump(qapp, lambda: server_cb.applied)
+        assert server_cb.applied[0]["text"] == big
+    finally:
+        client.close()
+        server.close()
+
+
 # --- ClipboardSync unit tests against the real QClipboard (single process) ---
 
 

@@ -16,18 +16,29 @@ PROTOCOL_VERSION = 1
 _HEADER = struct.Struct(">IB")
 _KIND_JSON = 0
 _KIND_FRAME = 1
-_MAX_PAYLOAD = 64 * 1024 * 1024
+MAX_PAYLOAD = 64 * 1024 * 1024
 
 
 class MessageStream(QObject):
-    """Sends and receives framed messages on an existing QTcpSocket."""
+    """Sends and receives framed messages on an existing QTcpSocket.
+
+    `max_payload` caps the accepted message size and may be raised later
+    (the server keeps it small until a client passes the approval handshake).
+    """
 
     jsonReceived = Signal(dict)
     frameReceived = Signal(bytes)
 
-    def __init__(self, socket: QTcpSocket, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        socket: QTcpSocket,
+        parent: QObject | None = None,
+        *,
+        max_payload: int = MAX_PAYLOAD,
+    ) -> None:
         super().__init__(parent)
         self.socket = socket
+        self.max_payload = max_payload
         socket.readyRead.connect(self._on_ready_read)
 
     def send_json(self, message: dict) -> None:
@@ -44,7 +55,7 @@ class MessageStream(QObject):
             if self.socket.bytesAvailable() < _HEADER.size:
                 return
             length, kind = _HEADER.unpack(self.socket.peek(_HEADER.size).data())
-            if length > _MAX_PAYLOAD:
+            if length > self.max_payload:
                 self.socket.abort()
                 return
             if self.socket.bytesAvailable() < _HEADER.size + length:

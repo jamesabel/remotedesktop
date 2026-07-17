@@ -56,11 +56,13 @@ class DiscoveryPanel(QWidget):
         threading.Thread(target=self._scan, name="discovery-scan", daemon=True).start()
 
     def _scan(self) -> None:
-        # Runs on a worker thread; the signal is delivered queued on the GUI thread.
+        # Runs on a worker thread; the signal is delivered queued on the GUI
+        # thread. Any failure must still emit, or the button stays disabled.
+        servers: list[ServerInfo] = []
         try:
             servers = discover_servers()
-        except OSError:
-            servers = []
+        except Exception:
+            pass
         self._scanFinished.emit(servers)
 
     def _show_results(self, servers: list) -> None:
@@ -116,6 +118,7 @@ class ClientWindow(QMainWindow):
         self._identity = load_client_identity(self._db)
         self._client: ShareClient | None = None
         self._connected = False
+        self._denied = False
         self._server_name = ""
         self._server_key = ""
         self._frame_count = 0
@@ -144,6 +147,8 @@ class ClientWindow(QMainWindow):
     def _record_discovered(self, servers: list) -> None:
         for server in servers:
             key = f"{server.host}:{server.port}"
+            if self._connected and key == self._server_key:
+                continue  # don't downgrade the connected server to "discovered"
             self.inventory.record(
                 key, "discovered", name=server.name, address=key, detail=key
             )
@@ -157,6 +162,7 @@ class ClientWindow(QMainWindow):
         self._server_key = f"{server.host}:{server.port}"
         self._frame_count = 0
         self._connected = False
+        self._denied = False
         self.inventory.record(
             self._server_key, "attempt", name=server.name,
             address=self._server_key, detail=self._server_key,
@@ -193,15 +199,19 @@ class ClientWindow(QMainWindow):
 
     def _on_denied(self, reason: str) -> None:
         self._connected = False
+        self._denied = True
         self.inventory.record(self._server_key, "denied", name=self._server_name)
         self.viewer.clear(f"Connection denied: {reason}")
         self.statusBar().showMessage(f"Denied by {self._server_name}: {reason}")
 
     def _on_disconnected(self) -> None:
         self._connected = False
-        if self._server_key:
+        # After a denial, keep "denied" as the peer's state in the inventory
+        # rather than overwriting it with the trailing "disconnected".
+        if self._server_key and not self._denied:
             self.inventory.record(self._server_key, "disconnected", name=self._server_name)
-        self.viewer.clear("Disconnected")
+        if not self._denied:
+            self.viewer.clear("Disconnected")
         self.statusBar().showMessage(f"Disconnected from {self._server_name}")
 
     def _on_frame(self, image) -> None:

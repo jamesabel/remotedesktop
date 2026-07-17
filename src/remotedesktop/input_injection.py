@@ -24,10 +24,24 @@ _MOUSE_BUTTON_FLAGS = {
 _MOUSEEVENTF_MOVE = 0x0001
 _MOUSEEVENTF_ABSOLUTE = 0x8000
 _MOUSEEVENTF_WHEEL = 0x0800
+_KEYEVENTF_EXTENDEDKEY = 0x0001
 _KEYEVENTF_KEYUP = 0x0002
 _INPUT_MOUSE = 0
 _INPUT_KEYBOARD = 1
 _ABS_MAX = 65535
+_MAPVK_VK_TO_VSC = 0
+
+# Keys whose hardware scan code carries the 0xE0 prefix. Injecting these
+# without KEYEVENTF_EXTENDEDKEY makes applications that read the extended
+# bit (or scan codes) see the numpad variant instead.
+_EXTENDED_VKS = frozenset({
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,  # PgUp/PgDn/End/Home/arrows
+    0x2C, 0x2D, 0x2E,  # PrintScreen/Insert/Delete
+    0x5B, 0x5C, 0x5D,  # left/right Win, menu key
+    0x6F,  # numpad divide
+    0x90,  # NumLock
+    0xA3, 0xA5,  # right Ctrl, right Alt
+})
 
 
 if _IS_WINDOWS:
@@ -85,7 +99,8 @@ class InputInjector:
         if self.available:
             self._send(self._mouse(0, x, y))
 
-    def button(self, x: float, y: float, name: str, pressed: bool) -> None:
+    def button(self, x: float | None, y: float | None, name: str, pressed: bool) -> None:
+        """Press or release a button; without coordinates, at the current cursor."""
         flags = _MOUSE_BUTTON_FLAGS.get(name)
         if flags is None or not self.available:
             return
@@ -98,5 +113,11 @@ class InputInjector:
     def key(self, vk: int, pressed: bool) -> None:
         if not self.available or not vk:
             return
-        ki = _KEYBDINPUT(vk & 0xFFFF, 0, 0 if pressed else _KEYEVENTF_KEYUP, 0, None)
+        vk &= 0xFFFF
+        flags = 0 if pressed else _KEYEVENTF_KEYUP
+        if vk in _EXTENDED_VKS:
+            flags |= _KEYEVENTF_EXTENDEDKEY
+        # Fill in the scan code too, for applications that read it.
+        scan = ctypes.windll.user32.MapVirtualKeyW(vk, _MAPVK_VK_TO_VSC)
+        ki = _KEYBDINPUT(vk, scan & 0xFF, flags, 0, None)
         self._send(_INPUT(_INPUT_KEYBOARD, _INPUT_UNION(ki=ki)))

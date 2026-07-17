@@ -22,11 +22,19 @@ mouse/keyboard control, and two-way clipboard sync. A running server appears
 in the client's *Servers* panel; opening it (after the server user approves
 the first connection) shows the remote screen, clicking into the view
 forwards mouse and keyboard input, and text/images copied on either side
-appear on the other. The connection is encrypted with TLS, and after the
-server user approves a client once, that client reconnects automatically
-using a stored token. The security model is tuned for a trusted LAN: the
+appear on the other. Input forwarding is safe against interruptions: if the
+viewer loses focus, a drag ends outside the view, or a client disconnects
+mid-keystroke, anything still held down is released on the server — no stuck
+keys or mouse buttons.
+
+The connection is encrypted with TLS, and after the server user approves a
+client once, that client reconnects automatically using a stored token.
+Unapproved connections are limited to small handshake messages until the
+server user admits them. The security model is tuned for a trusted LAN: the
 server's certificate is self-signed and trusted on first use, favoring
-reliable reconnection over strict certificate checking.
+reliable reconnection over strict certificate checking — if the server's
+certificate ever changes, the client logs a warning and updates its stored
+fingerprint rather than refusing to connect.
 
 Both apps have a second tab listing every peer seen on the LAN — on the
 server, the clients that have connected or attempted to; on the client, the
@@ -74,3 +82,7 @@ discoverable from other machines.
 uv sync          # set up the environment
 uv run pytest    # run the tests
 ```
+
+Run the tests from PowerShell or cmd, not Git Bash: Git Bash puts Git's
+MinGW OpenSSL DLLs on `PATH`, which Qt's TLS backend loads and crashes on.
+From PowerShell, Qt uses the Windows schannel backend as intended.

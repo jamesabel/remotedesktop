@@ -1,7 +1,6 @@
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QImage, QMouseEvent
-from PySide6.QtGui import QKeyEvent  # noqa: F401  (used in future input tests)
+from PySide6.QtGui import QFocusEvent, QImage, QKeyEvent, QMouseEvent
 
 from remotedesktop.viewer import ViewerWidget
 
@@ -87,6 +86,79 @@ def test_viewer_maps_coordinates_to_frame(qapp):
     assert events[-1]["action"] == "move"
     assert events[-1]["x"] == pytest.approx(0.5, abs=0.01)
     assert events[-1]["y"] == pytest.approx(0.5, abs=0.01)
+
+
+def _mouse_event(event_type, pos, button=Qt.MouseButton.LeftButton):
+    return QMouseEvent(
+        event_type, pos, button, button, Qt.KeyboardModifier.NoModifier
+    )
+
+
+def test_button_release_outside_frame_is_clamped_and_sent(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    # Press inside the frame, release over the top letterbox bar: the release
+    # must still be sent (clamped to the frame edge) or the server keeps the
+    # button held forever.
+    viewer.mousePressEvent(_mouse_event(QEvent.Type.MouseButtonPress, QPointF(200, 200)))
+    viewer.mouseReleaseEvent(_mouse_event(QEvent.Type.MouseButtonRelease, QPointF(200, 10)))
+    assert [e["pressed"] for e in events] == [True, False]
+    release = events[-1]
+    assert release["action"] == "button" and release["button"] == "left"
+    assert release["x"] == pytest.approx(0.5, abs=0.01)
+    assert release["y"] == pytest.approx(0.0)
+
+
+def test_release_without_press_is_ignored(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    viewer.mouseReleaseEvent(_mouse_event(QEvent.Type.MouseButtonRelease, QPointF(200, 200)))
+    assert events == []
+
+
+def test_focus_out_releases_held_keys_and_buttons(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    viewer.mousePressEvent(_mouse_event(QEvent.Type.MouseButtonPress, QPointF(200, 200)))
+    viewer.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, 0, 65, 0)
+    )
+    viewer.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    releases = [e for e in events if not e["pressed"]]
+    assert {"action": "button", "button": "left", "pressed": False} in releases
+    assert {"action": "key", "vk": 65, "pressed": False} in releases
+    # Everything was released once; a second focus-out has nothing to add.
+    viewer.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    assert len(events) == 4
+
+
+def test_server_releases_stuck_input_when_client_disconnects(qapp, credentials, tmp_path):
+    injector = RecordingInjector()
+    server = make_server(credentials, tmp_path, approve=lambda *_: True, injector=injector)
+    client = make_client(tmp_path)
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.send_input({"action": "button", "x": 0.5, "y": 0.5, "button": "left", "pressed": True})
+        client.send_input({"action": "key", "vk": 65, "pressed": True})
+        pump(qapp, lambda: len(injector.calls) >= 2)
+        client.close()
+        pump(qapp, lambda: ("key", 65, False) in injector.calls)
+        assert ("button", None, None, "left", False) in injector.calls
+    finally:
+        client.close()
+        server.close()
 
 
 def test_viewer_ignores_input_outside_frame(qapp):

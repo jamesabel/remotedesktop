@@ -49,3 +49,4 @@ Managed with `uv` (hatchling build backend, src layout):
 ## Environment Notes
 
 - Target platform is Windows; development happens on Windows 11. Requires Python >=3.14.
+- **Run the tests from PowerShell/cmd, not Git Bash.** Git Bash puts `C:\Program Files\Git\mingw64\bin` on PATH, so Qt loads its `openssl` TLS backend against Git's MinGW-built OpenSSL DLLs and crashes with an access violation on the first TLS connection. From PowerShell those DLLs aren't on PATH and Qt uses schannel, as intended.
