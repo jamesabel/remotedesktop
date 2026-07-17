@@ -56,3 +56,19 @@ def test_viewer_widget_shows_and_clears_frames(qapp) -> None:
     assert viewer.has_frame
     viewer.clear("gone")
     assert not viewer.has_frame
+
+
+def test_viewer_scales_frames_in_device_pixels(qapp) -> None:
+    from PySide6.QtGui import QImage
+
+    viewer = ViewerWidget()
+    viewer.resize(320, 240)
+    viewer.show_frame(QImage(640, 480, QImage.Format.Format_RGB32))  # same 4:3 aspect
+    viewer.grab()  # forces a paint pass without showing a window
+    assert viewer._scaled is not None
+    dpr = viewer.devicePixelRatioF()
+    # Scaled to physical pixels and stamped with the ratio, so painting it
+    # never resamples a second time.
+    assert viewer._scaled.devicePixelRatio() == dpr
+    assert viewer._scaled.size().width() == round(320 * dpr)
+    assert viewer._scaled.size().height() == round(240 * dpr)
