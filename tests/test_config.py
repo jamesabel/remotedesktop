@@ -33,6 +33,14 @@ def test_pairing_issues_and_persists_a_token(tmp_path) -> None:
     assert reloaded.token_for("some-id") == token
 
 
+def test_pairing_can_be_revoked(tmp_path) -> None:
+    path = tmp_path / "app.db"
+    paired = PairedClients(db.connect(path))
+    paired.pair("some-id")
+    paired.revoke("some-id")
+    assert "some-id" not in PairedClients(db.connect(path))
+
+
 def test_known_servers_round_trip(tmp_path) -> None:
     path = tmp_path / "app.db"
     known = KnownServers(db.connect(path))
@@ -40,3 +48,11 @@ def test_known_servers_round_trip(tmp_path) -> None:
     known.remember("host:1", "fingerprint-abc", "token-xyz")
     record = KnownServers(db.connect(path)).get("host:1")
     assert record == {"fingerprint": "fingerprint-abc", "token": "token-xyz"}
+
+
+def test_known_server_can_be_forgotten(tmp_path) -> None:
+    path = tmp_path / "app.db"
+    known = KnownServers(db.connect(path))
+    known.remember("host:1", "fp", "tok")
+    known.forget("host:1")
+    assert KnownServers(db.connect(path)).get("host:1") is None

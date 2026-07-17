@@ -78,6 +78,7 @@ class ShareServer(QObject):
         self._all_streams: set[MessageStream] = set()
         self._controllers: set[MessageStream] = set()
         self._stream_key: dict[MessageStream, tuple[str, str, str]] = {}
+        self._revoked: set[str] = set()
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -152,6 +153,26 @@ class ShareServer(QObject):
         if message.get("type") != "hello" or stream in self._streams:
             return
         self._handle_hello(stream, message)
+
+    def revoke_client(self, client_id: str) -> None:
+        """Remove a client's pairing and disconnect it if currently connected.
+
+        After this the client must be approved again to reconnect.
+        """
+        self._paired.revoke(client_id)
+        self._revoked.add(client_id)
+        self.status.emit(f"Revoked access for client {client_id}")
+        connected = [
+            stream for stream, (cid, _n, _p) in self._stream_key.items() if cid == client_id
+        ]
+        for stream in connected:
+            stream.send_json({"type": "denied", "reason": "access revoked"})
+            stream.socket.disconnectFromHost()  # _drop reports this as "revoked"
+        if not connected:
+            # Not connected right now: still mark it revoked in the inventory.
+            self.peerEvent.emit(
+                {"key": client_id, "event": "revoked", "name": "", "address": "", "detail": client_id}
+            )
 
     def _emit_peer(self, stream: MessageStream, event: str) -> None:
         client_id, client_name, peer = self._stream_key.get(
@@ -271,7 +292,8 @@ class ShareServer(QObject):
         self._controllers.discard(stream)
         self._all_streams.discard(stream)
         if stream in self._stream_key:
-            self._emit_peer(stream, "disconnected")
+            client_id = self._stream_key[stream][0]
+            self._emit_peer(stream, "revoked" if client_id in self._revoked else "disconnected")
             del self._stream_key[stream]
         if stream not in self._streams:
             self.status.emit("Connection closed before completing hello")

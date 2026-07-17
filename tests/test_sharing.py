@@ -96,6 +96,40 @@ def test_reconnect_uses_token_without_prompting(qapp, credentials, tmp_path):
         server.close()
 
 
+def test_revoke_disconnects_and_requires_reapproval(qapp, credentials, tmp_path):
+    prompts = []
+    server = make_server(
+        credentials, tmp_path, approve=lambda cid, name: prompts.append(cid) or True
+    )
+    try:
+        # First connection pairs.
+        client = make_client(tmp_path)
+        names = []
+        client.connected.connect(names.append)
+        client.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: names)
+        assert CLIENT_ID in PairedClients(db.connect(tmp_path / "server.db"))
+
+        # Revoke: the client is disconnected and the token removed.
+        disconnected = []
+        client.disconnected.connect(lambda: disconnected.append(True))
+        server.revoke_client(CLIENT_ID)
+        pump(qapp, lambda: disconnected)
+        assert CLIENT_ID not in PairedClients(db.connect(tmp_path / "server.db"))
+
+        # Reconnecting now prompts for approval again (its token no longer works).
+        client2 = make_client(tmp_path)
+        names2 = []
+        client2.connected.connect(names2.append)
+        client2.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: names2)
+        assert len(prompts) == 2
+    finally:
+        client2.close()
+        client.close()
+        server.close()
+
+
 def test_refused_client_is_denied_and_not_paired(qapp, credentials, tmp_path):
     server = make_server(credentials, tmp_path, approve=lambda *_: False)
     client = make_client(tmp_path)

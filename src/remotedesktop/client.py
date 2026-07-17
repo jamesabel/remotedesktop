@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTabWidget,
@@ -87,7 +88,10 @@ class ClientWindow(QMainWindow):
         self.inventory = ConnectionInventory(self._db, "client_peers", self)
         tabs = QTabWidget()
         tabs.addTab(self.viewer, "Remote Screen")
-        tabs.addTab(InventoryTab(self.inventory), "Servers on LAN")
+        tabs.addTab(
+            InventoryTab(self.inventory, "Forget server", self._forget_server),
+            "Servers on LAN",
+        )
         self.setCentralWidget(tabs)
 
         self.discovery_panel = DiscoveryPanel(self)
@@ -120,6 +124,22 @@ class ClientWindow(QMainWindow):
 
     def log(self, message: str) -> None:
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
+
+    def _forget_server(self, key: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Forget server",
+            f"Forget server {key}?\n\n"
+            "If connected it will be disconnected, and the next connection will "
+            "need the server user to approve this computer again.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self._connected and self._server_key == key and self._client is not None:
+            self._client.close()
+        self._known_servers.forget(key)
+        self.inventory.record(key, "forgotten")
+        self.log(f"Forgot server {key}")
 
     def _record_discovered(self, servers: list) -> None:
         for server in servers:

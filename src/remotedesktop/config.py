@@ -89,6 +89,11 @@ class PairedClients:
         self._db.commit()
         return token
 
+    def revoke(self, client_id: str) -> None:
+        """Remove a client's token so it must be approved again to reconnect."""
+        self._db.execute("DELETE FROM paired_clients WHERE client_id = ?", (client_id,))
+        self._db.commit()
+
 
 class KnownServers:
     """Client-side record of paired servers, keyed by "host:port"."""
@@ -109,4 +114,9 @@ class KnownServers:
             "token = excluded.token",
             (key, fingerprint, token),
         )
+        self._db.commit()
+
+    def forget(self, key: str) -> None:
+        """Drop a server's stored token and pin, so the next connection re-pairs."""
+        self._db.execute("DELETE FROM known_servers WHERE key = ?", (key,))
         self._db.commit()

@@ -55,6 +55,19 @@ def test_inventory_tab_shows_rows(qapp):
     assert tab._table.item(0, 0).text() == "A"
 
 
+def test_inventory_tab_action_button_passes_selected_key(qapp):
+    inv = ConnectionInventory()
+    inv.record("client-42", "connected", name="Bob")
+    acted = []
+    tab = InventoryTab(inv, "Revoke", acted.append)
+    # No selection yet -> button disabled and does nothing useful.
+    assert not tab._action_button.isEnabled()
+    tab._table.selectRow(0)
+    assert tab._action_button.isEnabled()
+    tab._action_button.click()
+    assert acted == ["client-42"]
+
+
 def test_server_populates_inventory_via_peer_events(qapp, credentials, tmp_path):
     server = make_server(credentials, tmp_path, approve=lambda *_: True)
     inv = ConnectionInventory()

@@ -2,26 +2,28 @@
 
 Both apps keep one `ConnectionInventory`: the server records every client that
 connects or attempts to, the client records every server it discovers or tries
-to reach. `InventoryTab` shows it as a table. The inventory is in-memory and
-covers the current run — enough to answer "who is using this on the LAN right
-now, and who tried?" for a solo developer or a small team.
+to reach. `InventoryTab` shows it as a table and, optionally, a button to act
+on the selected peer (revoke a client / forget a server). Persisted in SQLite,
+so it answers "who is using this on the LAN, and who tried?" across restarts.
 """
 
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import astuple, dataclass, fields
 
-from PySide6.QtCore import QObject, Signal
-
-from remotedesktop import db
+from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from remotedesktop import db
 
 # Event -> the state to display for the peer after it happens.
 _EVENT_STATE = {
@@ -33,6 +35,8 @@ _EVENT_STATE = {
     "denied": "denied",
     "refused": "refused",
     "disconnected": "disconnected",
+    "revoked": "revoked",
+    "forgotten": "forgotten",
     "error": "error",
 }
 
@@ -134,17 +138,29 @@ class ConnectionInventory(QObject):
 
 
 class InventoryTab(QWidget):
-    """Table view of a ConnectionInventory, refreshed as it changes."""
+    """Table view of a ConnectionInventory, refreshed as it changes.
+
+    If `action_label`/`action_callback` are given, a button below the table is
+    enabled when a row is selected and calls `action_callback(peer_key)`.
+    """
 
     _COLUMNS = ["Name", "Address", "Identifier", "State", "Attempts", "First seen", "Last seen"]
 
-    def __init__(self, inventory: ConnectionInventory, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        inventory: ConnectionInventory,
+        action_label: str | None = None,
+        action_callback: Callable[[str], None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._inventory = inventory
+        self._action_callback = action_callback
         self._table = QTableWidget(0, len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
@@ -152,8 +168,33 @@ class InventoryTab(QWidget):
         self._table.horizontalHeader().setStretchLastSection(True)
         layout = QVBoxLayout(self)
         layout.addWidget(self._table)
+
+        self._action_button: QPushButton | None = None
+        if action_label and action_callback:
+            self._action_button = QPushButton(action_label)
+            self._action_button.setEnabled(False)
+            self._action_button.clicked.connect(self._on_action)
+            self._table.itemSelectionChanged.connect(self._on_selection_changed)
+            layout.addWidget(self._action_button)
+
         inventory.changed.connect(self.refresh)
         self.refresh()
+
+    def _selected_key(self) -> str | None:
+        row = self._table.currentRow()
+        if row < 0:
+            return None
+        item = self._table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _on_selection_changed(self) -> None:
+        if self._action_button is not None:
+            self._action_button.setEnabled(self._selected_key() is not None)
+
+    def _on_action(self) -> None:
+        key = self._selected_key()
+        if key and self._action_callback is not None:
+            self._action_callback(key)
 
     def refresh(self) -> None:
         peers = self._inventory.peers()
@@ -169,4 +210,9 @@ class InventoryTab(QWidget):
                 peer.last_seen,
             ]
             for column, value in enumerate(values):
-                self._table.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, peer.key)
+                self._table.setItem(row, column, item)
+        if self._action_button is not None:
+            self._action_button.setEnabled(self._selected_key() is not None)

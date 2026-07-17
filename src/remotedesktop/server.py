@@ -56,7 +56,10 @@ class ServerWindow(QMainWindow):
         self.inventory = ConnectionInventory(self._db, "server_peers", self)
         tabs = QTabWidget()
         tabs.addTab(status_tab, "Status")
-        tabs.addTab(InventoryTab(self.inventory), "Clients on LAN")
+        tabs.addTab(
+            InventoryTab(self.inventory, "Revoke access", self._revoke_client),
+            "Clients on LAN",
+        )
         self.setCentralWidget(tabs)
 
         if credentials is None:
@@ -128,6 +131,16 @@ class ServerWindow(QMainWindow):
             else "Not sharing"
         )
         self._summary.setText(f"{discoverable}\n{sharing}")
+
+    def _revoke_client(self, client_id: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Revoke access",
+            f"Revoke access for client {client_id}?\n\n"
+            "It will be disconnected now and must be approved again to reconnect.",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.share_server.revoke_client(client_id)
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:
         answer = QMessageBox.question(
