@@ -34,16 +34,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - run: uv run pytest --cov=remotedesktop --cov-report=term
-      - name: Update coverage badge
+      - name: Publish coverage badge
+        # master is PR-only (repo ruleset), so the badge lives on its own
+        # branch: a single-file orphan commit, force-pushed each time.
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: |
-          uv run python scripts/make_coverage_badge.py
-          git add badges/coverage.svg
-          git diff --cached --quiet
-          if ($LASTEXITCODE -ne 0) {
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "Update coverage badge [skip ci]"
-            git push
-          }
-          exit 0
+          uv run python scripts/make_coverage_badge.py badges/coverage.svg
+          $blob = (git hash-object -w badges/coverage.svg).Trim()
+          $tree = ("100644 blob $blob`tcoverage.svg" | git mktree).Trim()
+          $commit = (git commit-tree $tree -m "Update coverage badge").Trim()
+          git push --force origin "${commit}:refs/heads/badges"

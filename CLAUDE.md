@@ -15,6 +15,13 @@ A Python client/server remote desktop GUI application (PySide6) for Windows comp
 
 LAN autodiscovery, screen sharing, keyboard/mouse forwarding, clipboard sync, and a TLS-encrypted transport with a token-authenticated handshake are all implemented — the readme feature set plus security hardening.
 
+## Workflow
+
+**Never push directly to `master`** — a repository ruleset rejects it. Every
+change goes through a pull request: branch → push → PR → CI green → merge.
+CI publishes the coverage badge to the unprotected `badges` branch (readme
+references it by raw URL), so no workflow ever needs to write to `master`.
+
 ## Commands
 
 Managed with `uv` (hatchling build backend, src layout):
