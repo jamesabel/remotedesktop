@@ -11,7 +11,11 @@ computers on the same LAN, with autodiscovery of servers.
 
 The server can optionally start automatically when you log in to Windows —
 a checkbox on its Status tab registers it under the per-user Run key (no
-administrator rights needed).
+administrator rights needed). The Status tab also has a *Restart server*
+button that relaunches the app in a fresh process; since the server's
+screen can be controlled remotely, this lets you update the software from
+a remote desktop session and restart into the new version without visiting
+the machine (approved clients reconnect without a new permission prompt).
 
 Connections are made to the desktop screen, keyboard, mouse, and clipboard.
 Other connections are not provided, such as shared drives, devices, or

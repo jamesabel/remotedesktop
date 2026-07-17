@@ -1,7 +1,9 @@
 import socket
+import sys
 
+from PySide6.QtCore import QProcess
 from PySide6.QtNetwork import QHostAddress, QTcpServer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from remotedesktop import db
 from remotedesktop.autostart import Autostart
@@ -83,6 +85,40 @@ def test_autostart_checkbox_toggles_registration(qapp, credentials, tmp_path):
         assert not window._autostart.is_enabled()
     finally:
         window.close()
+
+
+def test_restart_declined_keeps_serving(qapp, credentials, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+    )
+    launches = []
+    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: launches.append(a)))
+    window = make_window(credentials, tmp_path)
+    try:
+        window._restart_server()
+        assert launches == []
+        assert window.share_server._server.isListening()
+        assert window.responder is not None
+    finally:
+        window.close()
+
+
+def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    launches, quits = [], []
+    monkeypatch.setattr(
+        QProcess, "startDetached", staticmethod(lambda *a: launches.append(a) or True)
+    )
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(credentials, tmp_path)
+    window._restart_server()
+    # Ports are freed before the new process is spawned, so it can bind them.
+    assert window.responder is None
+    assert not window.share_server._server.isListening()
+    assert launches == [(sys.executable, ["-m", "remotedesktop.server"])]
+    assert quits == [True]
 
 
 def stub_approval_prompt(monkeypatch, button):

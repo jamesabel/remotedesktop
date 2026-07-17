@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QProcess, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -60,10 +61,18 @@ class ServerWindow(QMainWindow):
         self.connection_log = QPlainTextEdit()
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
+        self.restart_button = QPushButton("Restart server")
+        self.restart_button.setToolTip(
+            "Relaunch this app (e.g. after updating the software). It can be "
+            "clicked from a remote desktop session, so an update doesn't "
+            "require visiting this computer."
+        )
+        self.restart_button.clicked.connect(self._restart_server)
         status_tab = QWidget()
         status_layout = QVBoxLayout(status_tab)
         status_layout.addWidget(self._summary)
         status_layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
+        status_layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
         status_layout.addStretch(1)
 
         # Tests inject a connection to a temp database; the app uses the default.
@@ -168,6 +177,38 @@ class ServerWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.share_server.revoke_client(client_id)
+
+    def _restart_server(self) -> None:
+        """Relaunch this app in a new process and exit.
+
+        Meant to be clicked through a remote desktop session after updating
+        the software, so the new version starts without anyone at this
+        computer. The listening sockets are closed before spawning so the
+        replacement can bind the same ports.
+        """
+        answer = QMessageBox.question(
+            self,
+            "Restart server",
+            "Restart the server app?\n\n"
+            "Viewers will be disconnected and can reconnect in a few seconds "
+            "(approved clients reconnect without a new permission prompt).",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.log("Restarting: freeing ports and launching a new server process")
+        _log.info("Restart requested — relaunching %s -m remotedesktop.server", sys.executable)
+        if self.responder is not None:
+            self.responder.stop()
+            self.responder = None
+        self.share_server.close()
+        if not QProcess.startDetached(sys.executable, ["-m", "remotedesktop.server"]):
+            # Extremely unlikely (sys.executable exists); the app stays open —
+            # sharing is stopped, but the machine isn't left with nothing.
+            self.log("Restart failed: could not launch a new process — restart manually")
+            _log.error("QProcess.startDetached failed for %s", sys.executable)
+            return
+        self.close()
+        QApplication.quit()
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:
         box = QMessageBox(
