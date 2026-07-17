@@ -1,3 +1,6 @@
+import json
+import struct
+
 from PySide6.QtGui import QColor, QImage, QPainter
 
 from remotedesktop import frames
@@ -52,6 +55,32 @@ def test_delta_round_trip_is_lossless(qapp):
     assert patched == modified
     assert patched.pixelColor(5, 5).name() == "#ff0000"
     assert patched.pixelColor(5, 100).name() == "#0000ff"
+
+
+def test_apply_delta_patches_in_place(qapp):
+    base = solid(64, 128, "red")
+    modified = solid(64, 128, "red")
+    fill_rect(modified, 0, 64, 64, 64, "blue")
+    payload = frames.encode_delta(modified, [(64, 64)])
+    patched = frames.apply_delta(base, payload)
+    assert patched is base  # no full-canvas copy per delta
+
+
+def test_bad_band_leaves_the_canvas_untouched(qapp):
+    base = solid(64, 128, "red")
+    # A valid first band followed by an undecodable second band. Nothing may
+    # be painted, or the canvas would be half-patched with no keyframe
+    # recovery covering the first band.
+    good_band = frames.encode_image(solid(64, 64, "blue"))
+    header = json.dumps(
+        {"w": 64, "h": 128, "bands": [
+            {"y": 0, "h": 64, "len": len(good_band)},
+            {"y": 64, "h": 64, "len": 10},
+        ]}
+    ).encode()
+    payload = struct.pack(">I", len(header)) + header + good_band + b"\0" * 10
+    assert frames.apply_delta(base, payload) is None
+    assert base == solid(64, 128, "red")
 
 
 def test_delta_for_a_different_size_is_rejected(qapp):

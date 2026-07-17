@@ -53,8 +53,12 @@ DEFAULT_FPS = 30
 # Only for full frames to legacy (0.5.0) clients, which force-decode frames
 # as JPEG. Delta-capable clients get lossless PNG keyframes and delta bands.
 JPEG_QUALITY = 70
-# Skip sending to a client whose socket buffer is this far behind.
-_MAX_SEND_BACKLOG = 8 * 1024 * 1024
+# Skip sending to a client whose socket buffer is this far behind. Unsent
+# bytes are queued latency (the client renders them all before showing
+# anything current), so the cap is kept tight: ~160 ms of queue on 100 Mbit
+# WiFi, with headroom above one 4K keyframe (~1 MB) so a fresh keyframe
+# never trips it by itself.
+_MAX_SEND_BACKLOG = 2 * 1024 * 1024
 # Until a client passes the approval handshake it may only send small
 # messages (a hello is well under 1 KB); the cap is lifted on admission.
 _PREAUTH_MAX_PAYLOAD = 64 * 1024
@@ -539,7 +543,7 @@ class ShareServer(QObject):
                 stream.send_frame(legacy_jpeg)
             elif stream in self._needs_keyframe or bands is None:
                 if keyframe_png is None:
-                    keyframe_png = frames.encode_image(image)
+                    keyframe_png = frames.encode_image(image, "PNG", frames.PNG_QUALITY)
                     _log.debug("Keyframe: %d KB PNG", len(keyframe_png) // 1024)
                 stream.send_frame(keyframe_png)
                 self._needs_keyframe.discard(stream)
