@@ -12,6 +12,8 @@ from remotedesktop.performance import (
     MetricSeries,
     PerformanceMonitor,
     PerformanceTab,
+    nice_ceiling,
+    rate_unit,
 )
 from remotedesktop.protocol import MessageStream
 from remotedesktop.sharing import ShareClient, ShareServer
@@ -325,11 +327,36 @@ def test_share_client_drops_the_connection_on_lost_signal(qapp, tmp_path):
     assert any("Connection lost" in s and "10 s" in s for s in statuses)
 
 
+def test_nice_ceiling_rounds_up_to_1_2_5():
+    assert nice_ceiling(0.0) == 1.0
+    assert nice_ceiling(-3.0) == 1.0
+    assert nice_ceiling(0.7) == 1.0
+    assert nice_ceiling(1.0) == 1.0
+    assert nice_ceiling(1.5) == 2.0
+    assert nice_ceiling(3.0) == 5.0
+    assert nice_ceiling(42.0) == 50.0
+    assert nice_ceiling(50.0) == 50.0
+    assert nice_ceiling(99.0) == 100.0
+    assert nice_ceiling(2049.0) == 5000.0
+    assert nice_ceiling(0.03) == pytest.approx(0.05)
+
+
+def test_rate_unit_matches_format_rate_unit():
+    assert rate_unit(500.0) == 1.0
+    assert rate_unit(2048.0) == 1024.0
+    assert rate_unit(3 * 1024 * 1024) == 1024.0 * 1024.0
+    # A round tick count in the displayed unit: 70000 B/s displays in KB/s,
+    # and the resulting ceiling is 100 KB/s exactly.
+    unit = rate_unit(70000.0)
+    assert unit * nice_ceiling(70000.0 / unit) == 100.0 * 1024.0
+
+
 def test_graph_widgets_render_headless(qapp):
     seeded = PerformanceMonitor()
     seeded.send_bps.add(100.0)
     seeded.send_bps.add(2048.0)
     seeded.recv_bps.add(50.0)
+    seeded.rtt_ms.add(12.5)  # exercises the RTT graph's grid/axes path too
     for monitor in (seeded, PerformanceMonitor()):  # data and "no data" paths
         tab = PerformanceTab(monitor)
         tab.resize(400, 300)

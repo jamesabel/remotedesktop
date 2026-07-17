@@ -30,13 +30,14 @@ All timing uses time.monotonic(), injectable as `clock=` for tests.
 
 import itertools
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import Callable
 from typing import Protocol
 
 from PySide6.QtCore import QObject, QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPolygonF, QShowEvent
+from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen, QPolygonF, QShowEvent
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 _log = logging.getLogger("remotedesktop.performance")
@@ -58,6 +59,7 @@ DEFAULT_INTERVAL_MS = 1000
 DEFAULT_DEAD_AFTER_SECONDS = 10.0
 _PING_PRUNE_SECONDS = 30.0
 _HEARTBEAT_TICKS = 10  # one debug-log line per this many samples
+_GRID_DIVISIONS = 4  # grid cells per axis, i.e. 5 ticks including both ends
 
 
 class MetricSeries:
@@ -270,6 +272,30 @@ def format_ms(ms: float) -> str:
     return f"{ms:.1f} ms"
 
 
+def rate_unit(bytes_per_second: float) -> float:
+    """The divisor format_rate will display this value in (B/KB/MB per s),
+    so axis ticks can be computed in the displayed unit and land on round
+    numbers there."""
+    if bytes_per_second >= 1024 * 1024:
+        return 1024.0 * 1024.0
+    if bytes_per_second >= 1024:
+        return 1024.0
+    return 1.0
+
+
+def nice_ceiling(value: float) -> float:
+    """Smallest 1/2/5 x 10^k that is >= value, so axis ticks land on round
+    numbers instead of the raw data maximum."""
+    if value <= 0:
+        return 1.0
+    exponent = math.floor(math.log10(value))
+    for multiplier in (1.0, 2.0, 5.0, 10.0):
+        candidate = multiplier * 10.0**exponent
+        if candidate >= value:
+            return candidate
+    raise AssertionError("unreachable: 10 * 10**floor(log10(v)) >= v")
+
+
 class GraphWidget(QWidget):
     """A rolling line graph over the monitor's window, painted with QPainter.
 
@@ -284,6 +310,7 @@ class GraphWidget(QWidget):
         monitor: PerformanceMonitor,
         format_value: Callable[[float], str],
         *,
+        tick_unit: Callable[[float], float] = lambda _value: 1.0,
         clock: Callable[[], float] = time.monotonic,
         parent: QWidget | None = None,
     ) -> None:
@@ -292,8 +319,12 @@ class GraphWidget(QWidget):
         self._series = series
         self._monitor = monitor
         self._format_value = format_value
+        # Maps the data maximum to the unit format_value displays it in, so
+        # the axis ceiling is a round number of that unit (100 KB/s, not the
+        # 97.7 KB/s that a round number of bytes/s would render as).
+        self._tick_unit = tick_unit
         self._clock = clock
-        self.setMinimumSize(300, 120)
+        self.setMinimumSize(300, 140)  # room for the axis-label rows
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -313,12 +344,52 @@ class GraphWidget(QWidget):
                 self.rect(), Qt.AlignmentFlag.AlignCenter, "no data"
             )
             return
-        y_max = max(
+        raw_max = max(
             (value for _l, _c, samples in data for _t, value in samples), default=1.0
         )
-        y_max = max(y_max, 1.0)
+        unit = self._tick_unit(raw_max)
+        y_max = unit * nice_ceiling(raw_max / unit)
 
-        graph = self.rect().adjusted(8, 24, -8, -20)
+        # Y tick labels (with units, via the formatter) size the left margin;
+        # the bottom leaves a row for X tick labels and one for the legend.
+        metrics = painter.fontMetrics()
+        y_ticks = [y_max * i / _GRID_DIVISIONS for i in range(_GRID_DIVISIONS + 1)]
+        y_labels = [self._format_value(v) for v in y_ticks]
+        left = 8 + max(metrics.horizontalAdvance(t) for t in y_labels) + 6
+        graph = self.rect().adjusted(left, 24, -12, -(2 * metrics.height() + 12))
+
+        grid_color = palette.color(palette.ColorRole.Mid)
+        grid_pen = QPen(grid_color, 0, Qt.PenStyle.DotLine)
+        text_color = palette.color(palette.ColorRole.Text)
+        for value, label in zip(y_ticks, y_labels):
+            y = graph.bottom() - graph.height() * (value / y_max)
+            painter.setPen(grid_pen)
+            painter.drawLine(graph.left(), round(y), graph.right(), round(y))
+            painter.setPen(text_color)
+            painter.drawText(
+                graph.left() - 6 - metrics.horizontalAdvance(label),
+                round(y) + metrics.ascent() // 2 - 1,
+                label,
+            )
+        x_label_baseline = graph.bottom() + metrics.ascent() + 4
+        for i in range(_GRID_DIVISIONS + 1):
+            seconds_ago = window * (1 - i / _GRID_DIVISIONS)
+            x = graph.left() + graph.width() * i / _GRID_DIVISIONS
+            painter.setPen(grid_pen)
+            painter.drawLine(round(x), graph.top(), round(x), graph.bottom())
+            label = f"{seconds_ago:g}"
+            width = metrics.horizontalAdvance(label)
+            # Center on the tick, but keep the edge labels inside the graph.
+            text_x = min(max(x - width / 2, graph.left()), graph.right() - width)
+            painter.setPen(text_color)
+            painter.drawText(round(text_x), x_label_baseline, label)
+        caption = "seconds ago"
+        painter.drawText(
+            self.rect().right() - 8 - metrics.horizontalAdvance(caption),
+            self.rect().bottom() - 6,
+            caption,
+        )
+
         for label, color, samples in data:
             if not samples:
                 continue
@@ -336,14 +407,8 @@ class GraphWidget(QWidget):
             latest = samples[-1][1] if samples else None
             text = f"{label} {self._format_value(latest)}" if latest is not None else f"{label} —"
             painter.setPen(color)
-            painter.drawText(x, self.rect().bottom() - 6, text)
-            x += painter.fontMetrics().horizontalAdvance(text) + 16
-        painter.setPen(palette.color(palette.ColorRole.Text))
-        painter.drawText(
-            self.rect().right() - 8 - painter.fontMetrics().horizontalAdvance(self._format_value(y_max)),
-            16,
-            self._format_value(y_max),
-        )
+            painter.drawText(round(x), self.rect().bottom() - 6, text)
+            x += metrics.horizontalAdvance(text) + 16
 
 
 class PerformanceTab(QWidget):
@@ -364,6 +429,7 @@ class PerformanceTab(QWidget):
             ],
             monitor,
             format_rate,
+            tick_unit=rate_unit,
         )
         self.ping_graph = GraphWidget(
             "Round-trip time",
