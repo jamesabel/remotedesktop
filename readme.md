@@ -17,6 +17,12 @@ Connections are made to the desktop screen, keyboard, mouse, and clipboard.
 Other connections are not provided, such as shared drives, devices, or
 multimedia (e.g., audio).
 
+The screen transfer is optimized for ordinary desktop work — documents,
+code, terminals — where most of the screen is static between frames: it is
+lossless (pixel-exact at full resolution) and only changed screen regions
+are transmitted. Smooth playback of fast-changing full-screen content, such
+as video or games, is a non-goal.
+
 The client and server are PySide6 (Qt) GUI apps, each run on its respective
 computer. The client requests connection to the server, and for the initial
 connection the user on the server side must permit the connection. After

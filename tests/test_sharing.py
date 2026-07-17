@@ -2,6 +2,7 @@ import logging
 import time
 
 from PySide6.QtCore import QEventLoop
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtNetwork import QSslSocket
 
 from remotedesktop import db, tls
@@ -396,6 +397,90 @@ def test_disconnected_client_paths_are_noops(qapp, tmp_path):
     client._on_ssl_errors([_FakeSslError()])
     assert any("Ignoring expected TLS" in s for s in statuses)
     client.close()
+
+
+def solid_image(color, *, width=64, height=128):
+    image = QImage(width, height, QImage.Format.Format_RGB32)
+    image.fill(QColor(color))
+    return image
+
+
+def test_delta_streaming_sends_only_changes(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    captures = {"image": solid_image("red")}
+    server._capture = lambda: captures["image"]
+    client = make_client(tmp_path)
+    images, raw_frames, deltas = [], [], []
+    client.frameReceived.connect(images.append)
+    client._stream.frameReceived.connect(raw_frames.append)
+    client._stream.deltaReceived.connect(deltas.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        # First frame is a full PNG keyframe.
+        pump(qapp, lambda: images)
+        assert raw_frames[0][:4] == b"\x89PNG"
+        assert images[0].pixelColor(5, 5).name() == "#ff0000"
+
+        # Static screen: nothing more is sent at all.
+        pump(qapp, lambda: True, timeout=0.4)
+        assert len(images) == 1 and not deltas
+
+        # Change the bottom band: exactly that region arrives as a delta.
+        changed = solid_image("red")
+        painter = QPainter(changed)
+        painter.fillRect(0, 64, 64, 64, QColor("blue"))
+        painter.end()
+        captures["image"] = changed
+        pump(qapp, lambda: deltas and len(images) >= 2)
+        assert len(raw_frames) == 1  # no second full frame was needed
+        latest = images[-1]
+        assert latest.pixelColor(5, 5).name() == "#ff0000"  # untouched region intact
+        assert latest.pixelColor(5, 100).name() == "#0000ff"  # patched region updated
+    finally:
+        client.close()
+        server.close()
+
+
+def test_legacy_client_still_gets_full_jpeg_frames(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    server._capture = lambda: solid_image("red")  # static screen
+    sock, stream = raw_tls_stream(qapp, server.port)
+    received = []
+    stream.frameReceived.connect(received.append)
+    # A 0.5.0 hello has no "delta" capability flag.
+    stream.send_json(
+        {"type": "hello", "version": PROTOCOL_VERSION, "client_id": "legacy-1", "name": "old"}
+    )
+    try:
+        # Legacy clients get a full frame every tick even with a static
+        # screen, and it must be JPEG (0.5.0 force-decodes frames as JPEG).
+        pump(qapp, lambda: len(received) >= 3)
+        assert all(frame[:3] == b"\xff\xd8\xff" for frame in received)
+    finally:
+        sock.abort()
+        server.close()
+
+
+def test_desynced_client_requests_and_gets_a_keyframe(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    captures = {"image": solid_image("red")}
+    server._capture = lambda: captures["image"]
+    client = make_client(tmp_path)
+    images, raw_frames = [], []
+    client.frameReceived.connect(images.append)
+    client._stream.frameReceived.connect(raw_frames.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: images)
+        # Corrupt the client's canvas size so the next delta is rejected and
+        # a keyframe is requested.
+        client._last_image = solid_image("red", width=8, height=8)
+        captures["image"] = solid_image("green")
+        pump(qapp, lambda: len(raw_frames) >= 2)  # the recovery keyframe
+        pump(qapp, lambda: images and images[-1].pixelColor(5, 5).name() == "#008000")
+    finally:
+        client.close()
+        server.close()
 
 
 def test_backlogged_viewer_frame_drop_is_reported(qapp, credentials, tmp_path, monkeypatch):

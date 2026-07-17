@@ -19,6 +19,7 @@ _log = logging.getLogger("remotedesktop.protocol")
 _HEADER = struct.Struct(">IB")
 _KIND_JSON = 0
 _KIND_FRAME = 1
+_KIND_DELTA = 2  # inter-frame delta (see frames.py); unknown to 0.5.0 peers
 MAX_PAYLOAD = 64 * 1024 * 1024
 
 
@@ -31,6 +32,7 @@ class MessageStream(QObject):
 
     jsonReceived = Signal(dict)
     frameReceived = Signal(bytes)
+    deltaReceived = Signal(bytes)
 
     def __init__(
         self,
@@ -47,8 +49,11 @@ class MessageStream(QObject):
     def send_json(self, message: dict) -> None:
         self._send(_KIND_JSON, json.dumps(message).encode())
 
-    def send_frame(self, jpeg: bytes) -> None:
-        self._send(_KIND_FRAME, jpeg)
+    def send_frame(self, frame: bytes) -> None:
+        self._send(_KIND_FRAME, frame)
+
+    def send_delta(self, payload: bytes) -> None:
+        self._send(_KIND_DELTA, payload)
 
     def _send(self, kind: int, payload: bytes) -> None:
         self.socket.write(_HEADER.pack(len(payload), kind) + payload)
@@ -92,4 +97,6 @@ class MessageStream(QObject):
                     self.jsonReceived.emit(message)
             elif kind == _KIND_FRAME:
                 self.frameReceived.emit(payload)
+            elif kind == _KIND_DELTA:
+                self.deltaReceived.emit(payload)
             # Unknown kinds are skipped so the protocol can grow.
