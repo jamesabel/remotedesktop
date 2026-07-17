@@ -5,7 +5,7 @@ description = "Remote desktop client/server for Windows computers on the same LA
 readme = "readme.md"
 license = "MIT"
 authors = [{ name = "James Abel", email = "j@abel.co" }]
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Environment :: Win32 (MS Windows)",
@@ -14,9 +14,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: System :: Networking",
 ]
-dependencies = []
+dependencies = [
+    "pyside6>=6.11.1",
+]
 
-[project.scripts]
+[project.gui-scripts]
 remotedesktop-client = "remotedesktop.client:main"
 remotedesktop-server = "remotedesktop.server:main"
 
