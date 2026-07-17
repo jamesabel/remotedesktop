@@ -145,6 +145,14 @@ class ViewerWidget(QWidget):
             self._pressed_keys.discard(vk)
         self.inputEvent.emit({"action": "key", "vk": vk, "pressed": pressed})
 
+    def focusNextPrevChild(self, next: bool) -> bool:
+        # Qt consumes Tab/Shift+Tab for focus traversal before keyPressEvent
+        # ever runs; declining here makes them arrive as ordinary key events
+        # so they reach the remote desktop instead of moving local focus.
+        if self._frame is not None:
+            return False
+        return super().focusNextPrevChild(next)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         self._key_event(event, True)
 
