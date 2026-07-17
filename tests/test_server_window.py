@@ -35,6 +35,10 @@ def test_window_listens_and_is_discoverable(qapp, credentials, tmp_path):
         assert window._discoverable
         assert "Discoverable on this LAN" in window._summary.text()
         assert "Not sharing" in window._summary.text()
+        tabs = window.centralWidget()
+        labels = [tabs.tabText(i) for i in range(tabs.count())]
+        assert "Performance" in labels and "Preferences" in labels
+        assert not window.performance._timer.isActive()  # idle: no periodic work
     finally:
         window.close()
 

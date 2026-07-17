@@ -44,6 +44,10 @@ class MessageStream(QObject):
         super().__init__(parent)
         self.socket = socket
         self.max_payload = max_payload
+        # Framed application bytes (headers included, TLS overhead excluded),
+        # sampled by the performance monitor to compute bandwidth.
+        self.bytes_sent = 0
+        self.bytes_received = 0
         socket.readyRead.connect(self._on_ready_read)
 
     def send_json(self, message: dict) -> None:
@@ -56,6 +60,7 @@ class MessageStream(QObject):
         self._send(_KIND_DELTA, payload)
 
     def _send(self, kind: int, payload: bytes) -> None:
+        self.bytes_sent += _HEADER.size + len(payload)
         self.socket.write(_HEADER.pack(len(payload), kind) + payload)
 
     def _on_ready_read(self) -> None:
@@ -79,6 +84,7 @@ class MessageStream(QObject):
                 return
             self.socket.read(_HEADER.size)
             payload = self.socket.read(length).data()
+            self.bytes_received += _HEADER.size + length
             if kind == _KIND_JSON:
                 try:
                     message = json.loads(bytes(payload).decode())

@@ -30,6 +30,10 @@ def test_window_starts_disconnected(qapp, tmp_path):
     window = make_window(tmp_path)
     assert window.statusBar().currentMessage() == "Not connected"
     assert "Client started" in window.connection_log.toPlainText()
+    tabs = window.centralWidget()
+    labels = [tabs.tabText(i) for i in range(tabs.count())]
+    assert "Performance" in labels and "Preferences" in labels
+    assert not window.performance._timer.isActive()  # idle: no periodic work
     window.close()
 
 

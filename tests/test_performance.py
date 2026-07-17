@@ -1,0 +1,250 @@
+import json
+
+import pytest
+from PySide6.QtGui import QShowEvent
+from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
+from PySide6.QtWidgets import QApplication
+
+from remotedesktop import db
+from remotedesktop.config import KnownServers, PairedClients
+from remotedesktop.performance import (
+    GraphWidget,
+    MetricSeries,
+    PerformanceMonitor,
+    PerformanceTab,
+)
+from remotedesktop.protocol import MessageStream
+from remotedesktop.sharing import ShareClient, ShareServer
+
+from test_sharing import IDENTITY, pump
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += dt
+
+
+class FakeStream:
+    def __init__(self) -> None:
+        self.bytes_sent = 0
+        self.bytes_received = 0
+        self.sent: list[dict] = []
+
+    def send_json(self, message: dict) -> None:
+        self.sent.append(message)
+
+
+def test_metric_series_trims_to_window():
+    clock = FakeClock()
+    series = MetricSeries(10.0, clock=clock)
+    series.add(1.0)
+    clock.advance(5)
+    series.add(2.0)
+    clock.advance(6)  # first sample is now 11 s old, second 6 s
+    assert [value for _t, value in series.samples()] == [2.0]
+    series.set_window(1.0)  # tightening the window re-trims immediately
+    assert series.samples() == []
+
+
+def test_monitor_samples_aggregate_bandwidth(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(window_seconds=60, clock=clock)
+    first, second = FakeStream(), FakeStream()
+    monitor.add_stream(first)
+    monitor._on_tick()  # first tick establishes the baseline; no rate sample
+    assert monitor.send_bps.latest() is None
+    first.bytes_sent += 1000
+    first.bytes_received += 500
+    clock.advance(2.0)
+    monitor._on_tick()
+    assert monitor.send_bps.latest() == 500.0
+    assert monitor.recv_bps.latest() == 250.0
+    # A second stream aggregates; removing it never yields a negative rate.
+    monitor.add_stream(second)
+    second.bytes_sent += 300
+    clock.advance(1.0)
+    monitor._on_tick()
+    assert monitor.send_bps.latest() == 300.0
+    monitor.remove_stream(second)
+    clock.advance(1.0)
+    monitor._on_tick()
+    assert monitor.send_bps.latest() == 0.0
+
+
+def test_monitor_skips_rate_on_zero_elapsed(qapp):
+    monitor = PerformanceMonitor(clock=FakeClock())  # clock never advances
+    monitor.add_stream(FakeStream())
+    monitor._on_tick()
+    monitor._on_tick()
+    assert monitor.send_bps.latest() is None
+
+
+def test_ping_pong_records_rtt_and_replies(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(clock=clock)
+    stream = FakeStream()
+    monitor.add_stream(stream)
+    monitor._on_tick()
+    ping = stream.sent[-1]
+    assert ping["type"] == "ping"
+    assert "rtt" not in ping  # nothing measured yet
+    clock.advance(0.05)
+    monitor.handle_message(stream, {"type": "pong", "id": ping["id"]})
+    assert monitor.rtt_ms.latest() == pytest.approx(50.0)
+    clock.advance(1.0)
+    monitor._on_tick()
+    assert stream.sent[-1]["rtt"] == pytest.approx(50.0)  # piggybacked
+    # An incoming ping is answered with an echoing pong and records peer RTT.
+    monitor.handle_message(stream, {"type": "ping", "id": 99, "rtt": 12.5})
+    assert stream.sent[-1] == {"type": "pong", "id": 99}
+    assert monitor.peer_rtt_ms.latest() == 12.5
+
+
+def test_stale_or_malformed_pongs_are_ignored(qapp):
+    monitor = PerformanceMonitor(clock=FakeClock())
+    stream = FakeStream()
+    monitor.add_stream(stream)
+    monitor.handle_message(stream, {"type": "pong", "id": 12345})
+    monitor.handle_message(stream, {"type": "pong", "id": "weird"})
+    monitor.handle_message(stream, {"type": "pong"})
+    assert monitor.rtt_ms.latest() is None
+
+
+def test_reset_clears_everything_and_stops_timer(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(clock=clock)
+    monitor.add_stream(FakeStream())
+    monitor._on_tick()
+    clock.advance(1.0)
+    monitor._on_tick()
+    assert monitor._timer.isActive()
+    monitor.reset()
+    assert not monitor._timer.isActive()
+    assert monitor.send_bps.samples() == []
+    assert monitor.rtt_ms.samples() == []
+    assert monitor._pending == {}
+
+
+def test_message_stream_counts_framed_bytes(qapp):
+    listener = QTcpServer()
+    assert listener.listen(QHostAddress.SpecialAddress.LocalHost, 0)
+    out_sock = QTcpSocket()
+    out_sock.connectToHost("127.0.0.1", listener.serverPort())
+    pump(qapp, lambda: listener.hasPendingConnections())
+    in_sock = listener.nextPendingConnection()
+    sender, receiver = MessageStream(out_sock), MessageStream(in_sock)
+    got = []
+    receiver.jsonReceived.connect(got.append)
+    receiver.frameReceived.connect(got.append)
+    try:
+        sender.send_json({"a": 1})
+        sender.send_frame(b"xyz")
+        pump(qapp, lambda: len(got) == 2)
+        # 4-byte length + 1 kind byte per message, plus the payloads.
+        expected = (5 + len(json.dumps({"a": 1}).encode())) + (5 + 3)
+        assert sender.bytes_sent == expected
+        assert receiver.bytes_received == expected
+    finally:
+        out_sock.abort()
+        listener.close()
+
+
+def make_pair(credentials, tmp_path, *, server_perf, client_perf):
+    server = ShareServer(
+        approve_client=lambda *_: True,
+        credentials=credentials,
+        paired=PairedClients(db.connect(tmp_path / "server.db")),
+        performance=server_perf,
+    )
+    assert server.listen(0)
+    client = ShareClient(
+        identity=IDENTITY,
+        known_servers=KnownServers(db.connect(tmp_path / "client.db")),
+        performance=client_perf,
+    )
+    return server, client
+
+
+def test_rtt_and_bandwidth_measured_on_both_ends(qapp, credentials, tmp_path):
+    server_perf = PerformanceMonitor(interval_ms=50)
+    client_perf = PerformanceMonitor(interval_ms=50)
+    server, client = make_pair(
+        credentials, tmp_path, server_perf=server_perf, client_perf=client_perf
+    )
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        # Both sides measure their own RTT ...
+        pump(qapp, lambda: client_perf.rtt_ms.latest() is not None)
+        pump(qapp, lambda: server_perf.rtt_ms.latest() is not None)
+        # ... and learn the peer's measurement from piggybacked pings.
+        pump(qapp, lambda: client_perf.peer_rtt_ms.latest() is not None)
+        pump(qapp, lambda: server_perf.peer_rtt_ms.latest() is not None)
+        for series in (client_perf.rtt_ms, client_perf.peer_rtt_ms):
+            assert all(value >= 0 for _t, value in series.samples())
+        # Bandwidth flows: frames server->client, pings both ways.
+        pump(qapp, lambda: client_perf.recv_bps.latest() is not None)
+        pump(qapp, lambda: server_perf.send_bps.latest() is not None)
+        assert any(value > 0 for _t, value in client_perf.recv_bps.samples())
+    finally:
+        client.close()
+        server.close()
+
+
+def test_old_peer_leaves_rtt_series_empty(qapp, credentials, tmp_path):
+    # A performance-less server takes the exact code path a 0.7.0 server
+    # takes for ping messages: silently dropped, never answered.
+    client_perf = PerformanceMonitor(interval_ms=50)
+    server, client = make_pair(
+        credentials, tmp_path, server_perf=None, client_perf=client_perf
+    )
+    frames = []
+    client.frameReceived.connect(frames.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: len(client_perf.recv_bps.samples()) >= 2)
+        assert client_perf.rtt_ms.latest() is None
+        assert client_perf.peer_rtt_ms.latest() is None
+        assert frames  # unanswered pings don't harm the connection
+    finally:
+        client.close()
+        server.close()
+
+
+def test_graph_widgets_render_headless(qapp):
+    seeded = PerformanceMonitor()
+    seeded.send_bps.add(100.0)
+    seeded.send_bps.add(2048.0)
+    seeded.recv_bps.add(50.0)
+    for monitor in (seeded, PerformanceMonitor()):  # data and "no data" paths
+        tab = PerformanceTab(monitor)
+        tab.resize(400, 300)
+        pixmap = tab.grab()
+        assert not pixmap.isNull()
+        assert pixmap.width() > 0
+
+
+def test_tab_schedules_no_paints_while_hidden(qapp, monkeypatch):
+    monitor = PerformanceMonitor()
+    _tab = PerformanceTab(monitor)  # subscribes to monitor.updated
+    painted = []
+    monkeypatch.setattr(GraphWidget, "update", lambda self: painted.append(self))
+    monitor.updated.emit()  # tab was never shown -> not visible
+    assert painted == []
+    monkeypatch.setattr(PerformanceTab, "isVisible", lambda self: True)
+    monitor.updated.emit()
+    assert len(painted) == 2  # both graphs refreshed
+
+
+def test_tab_refreshes_on_show_event(qapp, monkeypatch):
+    monitor = PerformanceMonitor()
+    tab = PerformanceTab(monitor)
+    painted = []
+    monkeypatch.setattr(GraphWidget, "update", lambda self: painted.append(self))
+    QApplication.sendEvent(tab, QShowEvent())
+    assert len(painted) == 2

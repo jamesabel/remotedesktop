@@ -28,6 +28,8 @@ from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
+from remotedesktop.performance import PerformanceMonitor, PerformanceTab
+from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
 from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
 
@@ -93,6 +95,11 @@ class ClientWindow(QMainWindow):
         self.setWindowTitle("Remote Desktop Client")
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
+        self._settings = Settings(self._db)
+        self.performance = PerformanceMonitor(
+            window_seconds=float(load_performance_window_seconds(self._settings)),
+            parent=self,
+        )
         self.viewer = ViewerWidget(self)
         self.inventory = ConnectionInventory(self._db, "client_peers", self)
         tabs = QTabWidget()
@@ -101,6 +108,7 @@ class ClientWindow(QMainWindow):
             InventoryTab(self.inventory, "Forget server", self._forget_server),
             "Servers on LAN",
         )
+        tabs.addTab(PerformanceTab(self.performance), "Performance")
         self.setCentralWidget(tabs)
 
         self.discovery_panel = DiscoveryPanel(self)
@@ -112,6 +120,7 @@ class ClientWindow(QMainWindow):
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
         tabs.addTab(self.connection_log, "Connection log")
+        tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
         self.discovery_panel.serversFound.connect(self._record_discovered)
@@ -128,7 +137,6 @@ class ClientWindow(QMainWindow):
         self._server_key = ""
         self._frame_count = 0
         self.statusBar().showMessage("Not connected")
-        self._settings = Settings(self._db)
         window_state.restore_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
         self.log("Client started")
         # Tests pass auto_scan=False so window tests never broadcast on the LAN.
@@ -180,10 +188,12 @@ class ClientWindow(QMainWindow):
             self._server_key, "attempt", name=server.name,
             address=self._server_key, detail=self._server_key,
         )
+        self.performance.reset()  # graphs show only the current connection
         client = ShareClient(
             identity=self._identity,
             known_servers=self._known_servers,
             clipboard=self._clipboard,
+            performance=self.performance,
             parent=self,
         )
         self._client = client
