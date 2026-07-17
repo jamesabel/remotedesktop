@@ -47,16 +47,16 @@ Windows, `%LOCALAPPDATA%\remotedesktop`).
 ## Running
 
 From a clone of this repository, double-click `run_server.bat` on the
-computer to be shared and `run_client.bat` on the viewing computer, or run
-from a terminal:
+computer to be shared and `run_client.bat` on the viewing computer. Each
+script prepares the environment (installing dependencies on first use) and
+then launches the app, closing its console window once the app is running.
+
+To run from a terminal instead:
 
 ```
 uv run remotedesktop-server
 uv run remotedesktop-client
 ```
-
-`uv run` creates the virtual environment and installs dependencies
-automatically on first use.
 
 The apps are also published on PyPI as
 [`remotedesktop`](https://pypi.org/project/remotedesktop/).
