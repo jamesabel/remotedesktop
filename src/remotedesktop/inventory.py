@@ -156,8 +156,11 @@ class InventoryTab(QWidget):
         super().__init__(parent)
         self._inventory = inventory
         self._action_callback = action_callback
-        self._table = QTableWidget(0, len(self._COLUMNS))
-        self._table.setHorizontalHeaderLabels(self._COLUMNS)
+        # One extra headerless column on the right: with stretchLastSection it
+        # absorbs the leftover width, so the data columns (including "Last
+        # seen") stay sized to their contents.
+        self._table = QTableWidget(0, len(self._COLUMNS) + 1)
+        self._table.setHorizontalHeaderLabels(self._COLUMNS + [""])
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)

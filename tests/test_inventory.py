@@ -74,6 +74,18 @@ def test_inventory_tab_shows_rows(qapp):
     assert item is not None and item.text() == "A"
 
 
+def test_inventory_tab_stretches_a_spacer_not_the_last_data_column(qapp):
+    inv = ConnectionInventory()
+    inv.record("a", "attempt", name="A", address="host:1")
+    tab = InventoryTab(inv)
+    spacer = tab._table.columnCount() - 1
+    assert spacer == len(InventoryTab._COLUMNS)  # one extra column on the right
+    header_item = tab._table.horizontalHeaderItem(spacer)
+    assert header_item is not None and header_item.text() == ""
+    assert tab._table.item(0, spacer) is None  # never populated
+    assert tab._table.horizontalHeader().stretchLastSection()
+
+
 def test_inventory_tab_action_button_passes_selected_key(qapp):
     inv = ConnectionInventory()
     inv.record("client-42", "connected", name="Bob")
