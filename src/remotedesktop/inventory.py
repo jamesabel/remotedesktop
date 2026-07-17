@@ -7,10 +7,13 @@ covers the current run — enough to answer "who is using this on the LAN right
 now, and who tried?" for a solo developer or a small team.
 """
 
+import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass, fields
 
 from PySide6.QtCore import QObject, Signal
+
+from remotedesktop import db
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -48,15 +51,55 @@ class PeerRecord:
 
 
 class ConnectionInventory(QObject):
+    """Peers seen on the LAN, backed by SQLite so it persists across restarts.
+
+    Pass a `sqlite3.Connection` from `db.connect`; omit it for an in-memory
+    database that lives only as long as the object (used by tests).
+    """
+
     changed = Signal()
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    _COLUMNS = [f.name for f in fields(PeerRecord)]
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection | None = None,
+        table: str = "peers",
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
+        if table not in db.PEER_TABLES:
+            raise ValueError(f"unknown inventory table: {table!r}")
+        self._table = table
         self._peers: dict[str, PeerRecord] = {}
+        self._db = connection if connection is not None else db.connect(None)
+        self._load()
 
     @staticmethod
     def _now() -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _load(self) -> None:
+        try:
+            rows = self._db.execute(f"SELECT {', '.join(self._COLUMNS)} FROM {self._table}")
+            for row in rows:
+                record = PeerRecord(*row)
+                self._peers[record.key] = record
+        except sqlite3.Error:
+            self._peers.clear()
+
+    def _save(self, record: PeerRecord) -> None:
+        placeholders = ", ".join("?" for _ in self._COLUMNS)
+        updates = ", ".join(f"{c}=excluded.{c}" for c in self._COLUMNS if c != "key")
+        try:
+            self._db.execute(
+                f"INSERT INTO {self._table} ({', '.join(self._COLUMNS)}) "
+                f"VALUES ({placeholders}) ON CONFLICT(key) DO UPDATE SET {updates}",
+                astuple(record),
+            )
+            self._db.commit()
+        except sqlite3.Error:
+            pass  # persistence failure must never break connectivity
 
     def record(
         self,
@@ -83,6 +126,7 @@ class ConnectionInventory(QObject):
             record.attempts += 1
         record.state = _EVENT_STATE.get(event, event)
         record.last_event = event
+        self._save(record)
         self.changed.emit()
 
     def peers(self) -> list[PeerRecord]:

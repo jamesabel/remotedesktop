@@ -1,8 +1,8 @@
 import time
 
-import pytest
 from PySide6.QtCore import QEventLoop
 
+from remotedesktop import db
 from remotedesktop.config import KnownServers, PairedClients
 from remotedesktop.sharing import ShareClient, ShareServer
 
@@ -19,10 +19,11 @@ def pump(qapp, condition, timeout=10.0):
 
 
 def make_server(credentials, tmp_path, *, approve, injector=None, clipboard=None):
+    # The server is a distinct "machine" from the client -> its own database.
     server = ShareServer(
         approve_client=approve,
         credentials=credentials,
-        paired=PairedClients(tmp_path / "paired.json"),
+        paired=PairedClients(db.connect(tmp_path / "server.db")),
         injector=injector,
         clipboard=clipboard,
     )
@@ -33,7 +34,7 @@ def make_server(credentials, tmp_path, *, approve, injector=None, clipboard=None
 def make_client(tmp_path, *, clipboard=None):
     return ShareClient(
         identity=IDENTITY,
-        known_servers=KnownServers(tmp_path / "known.json"),
+        known_servers=KnownServers(db.connect(tmp_path / "client.db")),
         clipboard=clipboard,
     )
 
@@ -54,8 +55,10 @@ def test_first_connection_prompts_pairs_and_streams(qapp, credentials, tmp_path)
         assert names and names[0]
         assert frames[0].width() > 0
         # The server issued a token and the client stored it.
-        assert CLIENT_ID in PairedClients(tmp_path / "paired.json")
-        assert KnownServers(tmp_path / "known.json").get(f"127.0.0.1:{server.port}")["token"]
+        assert CLIENT_ID in PairedClients(db.connect(tmp_path / "server.db"))
+        assert KnownServers(db.connect(tmp_path / "client.db")).get(
+            f"127.0.0.1:{server.port}"
+        )["token"]
     finally:
         client.close()
         server.close()
@@ -102,7 +105,7 @@ def test_refused_client_is_denied_and_not_paired(qapp, credentials, tmp_path):
     try:
         pump(qapp, lambda: denials)
         assert "refused" in denials[0]
-        assert CLIENT_ID not in PairedClients(tmp_path / "paired.json")
+        assert CLIENT_ID not in PairedClients(db.connect(tmp_path / "server.db"))
     finally:
         client.close()
         server.close()

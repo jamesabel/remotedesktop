@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from remotedesktop import db
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import KnownServers
+from remotedesktop.config import KnownServers, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareClient
@@ -81,8 +82,9 @@ class ClientWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Client")
+        self._db = db.connect(default_db_path())
         self.viewer = ViewerWidget(self)
-        self.inventory = ConnectionInventory(self)
+        self.inventory = ConnectionInventory(self._db, "client_peers", self)
         tabs = QTabWidget()
         tabs.addTab(self.viewer, "Remote Screen")
         tabs.addTab(InventoryTab(self.inventory), "Servers on LAN")
@@ -106,7 +108,8 @@ class ClientWindow(QMainWindow):
         self.viewer.inputEvent.connect(self._on_input_event)
 
         self._clipboard = ClipboardSync(parent=self)
-        self._known_servers = KnownServers()
+        self._known_servers = KnownServers(self._db)
+        self._identity = load_client_identity(self._db)
         self._client: ShareClient | None = None
         self._connected = False
         self._server_name = ""
@@ -139,7 +142,10 @@ class ClientWindow(QMainWindow):
             address=self._server_key, detail=self._server_key,
         )
         client = ShareClient(
-            known_servers=self._known_servers, clipboard=self._clipboard, parent=self
+            identity=self._identity,
+            known_servers=self._known_servers,
+            clipboard=self._clipboard,
+            parent=self,
         )
         self._client = client
         client.status.connect(self.log)

@@ -18,9 +18,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import tls
+from remotedesktop import db, tls
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import PairedClients, default_config_dir
+from remotedesktop.config import PairedClients, default_config_dir, default_db_path
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
     DISCOVERY_PORT,
@@ -52,7 +52,8 @@ class ServerWindow(QMainWindow):
         status_layout.addWidget(self._summary)
         status_layout.addWidget(self.connection_log, stretch=1)
 
-        self.inventory = ConnectionInventory(self)
+        self._db = db.connect(default_db_path())
+        self.inventory = ConnectionInventory(self._db, "server_peers", self)
         tabs = QTabWidget()
         tabs.addTab(status_tab, "Status")
         tabs.addTab(InventoryTab(self.inventory), "Clients on LAN")
@@ -63,6 +64,8 @@ class ServerWindow(QMainWindow):
             credentials = tls.load_or_create_credentials(
                 config_dir / "server_cert.pem", config_dir / "server_key.pem"
             )
+        if paired is None:
+            paired = PairedClients(self._db)
         self._clipboard = ClipboardSync(parent=self)
         self.share_server = ShareServer(
             self._ask_approval,

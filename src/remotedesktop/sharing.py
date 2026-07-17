@@ -27,11 +27,16 @@ from PySide6.QtNetwork import (
     QSslSocket,
 )
 
-from remotedesktop.config import KnownServers, PairedClients, load_client_identity
+from remotedesktop.config import (
+    KnownServers,
+    PairedClients,
+    default_db_path,
+    load_client_identity,
+)
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop.input_injection import InputInjector
 from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
-from remotedesktop import tls
+from remotedesktop import db, tls
 
 DEFAULT_FPS = 10
 JPEG_QUALITY = 70
@@ -63,7 +68,7 @@ class ShareServer(QObject):
     ) -> None:
         super().__init__(parent)
         self._approve_client = approve_client
-        self._paired = paired if paired is not None else PairedClients()
+        self._paired = paired if paired is not None else PairedClients(db.connect(default_db_path()))
         self._fps = fps
         self._injector = injector if injector is not None else InputInjector()
         self._clipboard = clipboard
@@ -316,7 +321,9 @@ class ShareClient(QObject):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self._client_id, self._name = identity or load_client_identity()
+        self._client_id, self._name = identity or load_client_identity(
+            db.connect(default_db_path())
+        )
         self._known = known_servers
         self._got_first_frame = False
         self._clipboard = clipboard

@@ -1,3 +1,4 @@
+from remotedesktop import db
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 
 from test_sharing import make_client, make_server, pump
@@ -25,6 +26,24 @@ def test_inventory_counts_multiple_attempts_and_orders_recent_first(qapp):
     assert by_key["a"].attempts == 2
     assert by_key["a"].state == "denied"
     assert by_key["b"].attempts == 1
+
+
+def test_inventory_persists_across_restarts(qapp, tmp_path):
+    path = tmp_path / "app.db"
+    inv = ConnectionInventory(db.connect(path))
+    inv.record("peer", "attempt", name="Bob", address="10.0.0.9:48654")
+    inv.record("peer", "connected", name="Bob")
+
+    # A fresh inventory on the same database sees the earlier peer.
+    reopened = ConnectionInventory(db.connect(path))
+    peers = reopened.peers()
+    assert len(peers) == 1
+    assert peers[0].name == "Bob"
+    assert peers[0].attempts == 1
+    assert peers[0].state == "connected"
+    # And it keeps accumulating rather than starting over.
+    reopened.record("peer", "attempt", name="Bob")
+    assert reopened.peers()[0].attempts == 2
 
 
 def test_inventory_tab_shows_rows(qapp):

@@ -1,6 +1,7 @@
 import socket
 
 import remotedesktop
+from remotedesktop import db
 from remotedesktop.client import ClientWindow, DiscoveryPanel
 from remotedesktop.config import PairedClients
 from remotedesktop.discovery import ServerInfo, discover_servers
@@ -33,7 +34,7 @@ def test_server_window_is_discoverable(qapp, credentials, tmp_path) -> None:
     window = ServerWindow(
         discovery_port=port,
         connect_port=0,
-        paired=PairedClients(tmp_path / "paired.json"),
+        paired=PairedClients(db.connect(tmp_path / "server.db")),
         credentials=credentials,
     )
     try:
