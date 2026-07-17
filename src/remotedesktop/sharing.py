@@ -19,7 +19,7 @@ import socket as socket_module
 from collections.abc import Callable
 from typing import cast
 
-from PySide6.QtCore import QBuffer, QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtNetwork import (
     QHostAddress,
@@ -37,6 +37,7 @@ from remotedesktop.config import (
     load_client_identity,
 )
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
+from remotedesktop import frames
 from remotedesktop.input_injection import InputInjector
 from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
 from remotedesktop import db, tls
@@ -44,6 +45,8 @@ from remotedesktop import db, tls
 _log = logging.getLogger("remotedesktop.sharing")
 
 DEFAULT_FPS = 10
+# Only for full frames to legacy (0.5.0) clients, which force-decode frames
+# as JPEG. Delta-capable clients get lossless PNG keyframes and delta bands.
 JPEG_QUALITY = 70
 # Skip sending to a client whose socket buffer is this far behind.
 _MAX_SEND_BACKLOG = 8 * 1024 * 1024
@@ -105,6 +108,13 @@ class ShareServer(QObject):
         # Streams currently too far behind to receive frames (see
         # _broadcast_frame); entering/leaving this set emits a status message.
         self._backlogged: set[MessageStream] = set()
+        # Inter-frame compression state: which admitted streams understand
+        # delta frames (hello carried "delta": true), which need a full
+        # keyframe next broadcast (just admitted, just caught up after a
+        # backlog, or asked for one), and the previous capture to diff.
+        self._delta_capable: set[MessageStream] = set()
+        self._needs_keyframe: set[MessageStream] = set()
+        self._previous_frame: QImage | None = None
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -151,6 +161,9 @@ class ShareServer(QObject):
         self._final.clear()
         self._pressed.clear()
         self._backlogged.clear()
+        self._delta_capable.clear()
+        self._needs_keyframe.clear()
+        self._previous_frame = None
         if had_clients:
             self.clientCountChanged.emit(0)
         self._server.close()
@@ -186,6 +199,13 @@ class ShareServer(QObject):
             if stream in self._streams and self._clipboard is not None:
                 self.status.emit(f"Clipboard update received from {_peer(stream.socket)}")
                 self._clipboard.apply(message)
+            return
+        if message.get("type") == "keyframe":
+            # The client lost sync with the delta stream (e.g. a band failed
+            # to decode) and wants a full frame to rebuild its canvas.
+            if stream in self._streams:
+                self.status.emit(f"Keyframe requested by {_peer(stream.socket)}")
+                self._needs_keyframe.add(stream)
             return
         if (
             message.get("type") != "hello"
@@ -234,6 +254,8 @@ class ShareServer(QObject):
         client_id = message.get("client_id")
         client_name = str(message.get("name", "unknown"))
         self.status.emit(f'Hello from "{client_name}" ({client_id}) at {peer}')
+        if message.get("delta"):
+            self._delta_capable.add(stream)
         if isinstance(client_id, str) and client_id:
             self._stream_key[stream] = (client_id, client_name, peer)
             self._emit_peer(stream, "attempt")
@@ -299,6 +321,7 @@ class ShareServer(QObject):
     def _admit(self, stream: MessageStream, client_name: str, welcome: dict) -> None:
         stream.max_payload = MAX_PAYLOAD  # pre-auth cap lifted once approved
         stream.send_json(welcome)
+        self._needs_keyframe.add(stream)  # its first frame must be a full one
         self._streams.append(stream)
         self.clientCountChanged.emit(len(self._streams))
         self.status.emit(
@@ -370,6 +393,8 @@ class ShareServer(QObject):
         self._all_streams.discard(stream)
         self._prompting.discard(stream)
         self._backlogged.discard(stream)
+        self._delta_capable.discard(stream)
+        self._needs_keyframe.discard(stream)
         self._release_input(stream)
         final = stream in self._final
         self._final.discard(stream)
@@ -394,26 +419,44 @@ class ShareServer(QObject):
         self.status.emit(f"Client disconnected — {len(self._streams)} viewer(s) remaining")
         if not self._streams:
             self._timer.stop()
+            self._previous_frame = None  # don't hold a stale capture
             self.status.emit("No viewers left — screen capture stopped")
+
+    def _capture(self) -> QImage | None:
+        """Grab the primary screen at full resolution (tests override this
+        to drive deterministic frame content)."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        image = screen.grabWindow(0).toImage()
+        return None if image.isNull() else image
 
     def _broadcast_frame(self) -> None:
         if not self._streams:
             return
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return
-        image = screen.grabWindow(0).toImage()
-        if image.isNull():
+        image = self._capture()
+        if image is None:
             self.status.emit("Screen capture failed (null image)")
             return
-        buffer = QBuffer()
-        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
-        image.save(buffer, "JPEG", JPEG_QUALITY)  # ty: ignore[no-matching-overload]
-        jpeg = bytes(buffer.data())  # ty: ignore[invalid-argument-type]
+        # bands is None when there is no comparable previous capture (first
+        # frame, or the resolution changed): everyone gets a full frame.
+        bands = (
+            frames.changed_bands(self._previous_frame, image)
+            if self._previous_frame is not None
+            else None
+        )
+        self._previous_frame = image
+        # Encode each variant at most once per tick, shared by all takers.
+        legacy_jpeg: bytes | None = None
+        keyframe_png: bytes | None = None
+        delta_payload: bytes | None = None
         for stream in self._streams:
             if stream.socket.bytesToWrite() > _MAX_SEND_BACKLOG:
                 # Client is not keeping up; drop frames for it (and say so —
                 # to the viewer this looks like a frozen or flaky connection).
+                # Its canvas will be stale once it catches up, so it must
+                # restart from a keyframe.
+                self._needs_keyframe.add(stream)
                 if stream not in self._backlogged:
                     self._backlogged.add(stream)
                     self.status.emit(
@@ -427,7 +470,22 @@ class ShareServer(QObject):
                 self.status.emit(
                     f"Viewer at {_peer(stream.socket)} caught up — resuming frames"
                 )
-            stream.send_frame(jpeg)
+            if stream not in self._delta_capable:
+                # Legacy (0.5.0) client: full JPEG every tick, as before.
+                if legacy_jpeg is None:
+                    legacy_jpeg = frames.encode_image(image, "JPEG", JPEG_QUALITY)
+                stream.send_frame(legacy_jpeg)
+            elif stream in self._needs_keyframe or bands is None:
+                if keyframe_png is None:
+                    keyframe_png = frames.encode_image(image)
+                    _log.debug("Keyframe: %d KB PNG", len(keyframe_png) // 1024)
+                stream.send_frame(keyframe_png)
+                self._needs_keyframe.discard(stream)
+            elif bands:
+                if delta_payload is None:
+                    delta_payload = frames.encode_delta(image, bands)
+                stream.send_delta(delta_payload)
+            # else: nothing changed since the last frame — send nothing.
 
 
 class ShareClient(QObject):
@@ -461,6 +519,7 @@ class ShareClient(QObject):
         self._server_fingerprint = ""
         self._server_token: str | None = None
         self._frame_count = 0
+        self._last_image: QImage | None = None  # delta patches build on this
         self._socket = QSslSocket(self)
         self._socket.setSslConfiguration(tls.client_configuration())
         self._stream = MessageStream(self._socket, self)
@@ -475,11 +534,13 @@ class ShareClient(QObject):
         )
         self._stream.jsonReceived.connect(self._on_message)
         self._stream.frameReceived.connect(self._on_frame)
+        self._stream.deltaReceived.connect(self._on_delta)
 
     def connect_to(self, host: str, port: int) -> None:
         self._socket.abort()  # drop any previous connection or attempt
         self._got_first_frame = False
         self._frame_count = 0
+        self._last_image = None
         self._server_key = f"{host}:{port}"
         record = self._known.get(self._server_key) if self._known else None
         self._server_token = record.get("token") if record else None
@@ -522,6 +583,7 @@ class ShareClient(QObject):
             "version": PROTOCOL_VERSION,
             "client_id": self._client_id,
             "name": self._name,
+            "delta": True,  # we understand inter-frame delta messages
         }
         if self._server_token:
             hello["token"] = self._server_token
@@ -568,16 +630,34 @@ class ShareClient(QObject):
                     self.status.emit("Clipboard update received from server")
                     self._clipboard.apply(message)
 
-    def _on_frame(self, jpeg: bytes) -> None:
-        image = QImage.fromData(jpeg, "JPEG")  # ty: ignore[invalid-argument-type]
+    def _on_frame(self, data: bytes) -> None:
+        # Full frame — PNG keyframe or (legacy servers) JPEG; sniffed from
+        # the payload's magic bytes.
+        image = QImage.fromData(data)
         if image.isNull():
-            self.status.emit(f"Received undecodable frame ({len(jpeg)} bytes)")
+            self.status.emit(f"Received undecodable frame ({len(data)} bytes)")
             return
+        self._deliver(image, len(data))
+
+    def _on_delta(self, payload: bytes) -> None:
+        if self._last_image is None:
+            self.status.emit("Delta frame arrived before a keyframe — requesting one")
+            self._stream.send_json({"type": "keyframe"})
+            return
+        image = frames.apply_delta(self._last_image, payload)
+        if image is None:
+            self.status.emit("Undecodable delta frame — requesting a keyframe")
+            self._stream.send_json({"type": "keyframe"})
+            return
+        self._deliver(image, len(payload))
+
+    def _deliver(self, image: QImage, byte_count: int) -> None:
+        self._last_image = image
         if not self._got_first_frame:
             self._got_first_frame = True
             self.status.emit(
                 f"First frame received: {image.width()}x{image.height()} "
-                f"({len(jpeg) // 1024} KB as JPEG)"
+                f"({byte_count // 1024} KB)"
             )
         self._frame_count += 1
         # A heartbeat in the debug log (~10 s at the default fps): gaps between
@@ -588,6 +668,6 @@ class ShareClient(QObject):
                 self._frame_count,
                 image.width(),
                 image.height(),
-                len(jpeg) // 1024,
+                byte_count // 1024,
             )
         self.frameReceived.emit(image)

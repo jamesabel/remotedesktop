@@ -29,6 +29,11 @@ class ViewerWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._frame: QPixmap | None = None
+        # The frame stays at the server's full resolution; what is painted is
+        # a SmoothTransformation-scaled copy (proper filtering, unlike the
+        # nearest-neighbor scaling of drawPixmap into a rect), cached until
+        # the frame or the display size changes.
+        self._scaled: QPixmap | None = None
         self._message = "Not connected"
         # Buttons/keys currently held, so releases can be forwarded even when
         # they happen outside the frame or when the widget loses focus —
@@ -45,10 +50,12 @@ class ViewerWidget(QWidget):
 
     def show_frame(self, image: QImage) -> None:
         self._frame = QPixmap.fromImage(image)
+        self._scaled = None
         self.update()
 
     def clear(self, message: str = "Not connected") -> None:
         self._frame = None
+        self._scaled = None
         self._message = message
         self._pressed_buttons.clear()
         self._pressed_keys.clear()
@@ -167,4 +174,11 @@ class ViewerWidget(QWidget):
             painter.setPen(Qt.GlobalColor.white)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
             return
-        painter.drawPixmap(self._display_rect().toRect(), self._frame)
+        rect = self._display_rect().toRect()
+        if self._scaled is None or self._scaled.size() != rect.size():
+            self._scaled = self._frame.scaled(
+                rect.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,  # rect is already aspect-correct
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        painter.drawPixmap(rect.topLeft(), self._scaled)
