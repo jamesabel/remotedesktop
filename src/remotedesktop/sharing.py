@@ -367,6 +367,10 @@ class ShareServer(QObject):
                     stream, "revoked" if client_id in self._revoked else "disconnected"
                 )
             del self._stream_key[stream]
+        # Fully reset the socket before the deferred delete: destroying a
+        # QSslSocket with TLS teardown still in flight crashes intermittently.
+        stream.socket.blockSignals(True)
+        stream.socket.abort()
         stream.socket.deleteLater()
         stream.deleteLater()
         if stream not in self._streams:
