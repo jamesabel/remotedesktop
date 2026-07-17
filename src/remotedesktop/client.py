@@ -92,8 +92,10 @@ class ClientWindow(QMainWindow):
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
         self.discovery_panel.status.connect(self.log)
+        self.viewer.inputEvent.connect(self._on_input_event)
 
         self._client: ShareClient | None = None
+        self._connected = False
         self._server_name = ""
         self._frame_count = 0
         self.statusBar().showMessage("Not connected")
@@ -109,6 +111,7 @@ class ClientWindow(QMainWindow):
             self._client.deleteLater()
         self._server_name = server.name
         self._frame_count = 0
+        self._connected = False
         client = ShareClient(parent=self)
         self._client = client
         client.status.connect(self.log)
@@ -122,13 +125,24 @@ class ClientWindow(QMainWindow):
 
     def _on_connected(self, server_name: str) -> None:
         self._server_name = server_name or self._server_name
-        self.statusBar().showMessage(f"Connected to {self._server_name} — waiting for first frame")
+        self._connected = True
+        self.viewer.setFocus()
+        self.statusBar().showMessage(
+            f"Connected to {self._server_name} — waiting for first frame "
+            "(click the view to control it)"
+        )
+
+    def _on_input_event(self, event: dict) -> None:
+        if self._connected and self._client is not None:
+            self._client.send_input(event)
 
     def _on_denied(self, reason: str) -> None:
+        self._connected = False
         self.viewer.clear(f"Connection denied: {reason}")
         self.statusBar().showMessage(f"Denied by {self._server_name}: {reason}")
 
     def _on_disconnected(self) -> None:
+        self._connected = False
         self.viewer.clear("Disconnected")
         self.statusBar().showMessage(f"Disconnected from {self._server_name}")
 

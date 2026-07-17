@@ -13,7 +13,7 @@ A Python client/server remote desktop GUI application (PySide6) for Windows comp
 - **Trust model:** on first connection, the user on the server side must explicitly permit the client. After that, the client may reconnect whenever the server is running without further approval.
 - **Constraint:** does not use Windows RDP and does not rely on any Microsoft-based authentication.
 
-LAN autodiscovery and screen sharing (with the first-connection approval flow) are implemented; keyboard/mouse/clipboard forwarding is not yet.
+LAN autodiscovery, screen sharing (with the first-connection approval flow), and keyboard/mouse forwarding are implemented; clipboard forwarding is not yet.
 
 ## Commands
 
@@ -36,6 +36,8 @@ Managed with `uv` (hatchling build backend, src layout):
 - **Trust model plumbing** (`config.py`): the client has a stable UUID identity and the server a persisted approved-ID set, both under `%APPDATA%/remotedesktop/`. `ShareServer` takes an `approve_client(client_id, name) -> bool` callback; `ServerWindow` implements it as a modal QMessageBox. Tests inject `ApprovedClients(tmp_path/...)` and explicit identities so they never touch real APPDATA or prompt.
 - **Status/debug logging is a feature**: `ShareServer`, `ShareClient`, and `DiscoveryPanel` emit human-readable `status` signals for every connection phase, and both windows show them in a timestamped "Connection log" pane. When adding connection behavior, emit a status message for each new phase or failure path — there's a test asserting the server's phase messages.
 - Sharing tests drive real sockets on the GUI thread by pumping `qapp.processEvents()` until a condition holds (see `pump()` in `tests/test_sharing.py`).
+- **Input forwarding**: `ViewerWidget` captures mouse/keyboard events and emits `inputEvent` dicts with coordinates normalized 0..1 over the *displayed* frame rect (letterboxing is reversed via `_display_rect()`; events outside the frame are dropped). Keys carry the client's `nativeVirtualKey()` — since both ends are Windows, the server injects that VK directly with no key-translation table. The client sends these as `{"type": "input", ...}`; `ShareServer` only injects input from streams that completed the hello/approval handshake.
+- **Injection is isolated behind `InputInjector`** (`input_injection.py`, Windows `SendInput` via ctypes; inert stub off-Windows). ShareServer takes an `injector=` param so tests pass a recording fake — **never let tests construct a real `InputInjector`, or they will move the host's actual mouse/keyboard.** Normalized 0..1 coords map directly to SendInput's 0..65535 absolute range over the primary monitor.
 - The package version lives only in `src/remotedesktop/__init__.py` (`__version__`); hatchling reads it from there (`[tool.hatch.version]`), so bump it in that one place.
 - Widget tests need a `QApplication`; use the session-scoped `qapp` fixture in `tests/conftest.py`.
 

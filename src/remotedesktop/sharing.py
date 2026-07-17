@@ -18,6 +18,7 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
 
 from remotedesktop.config import ApprovedClients, load_client_identity
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
+from remotedesktop.input_injection import InputInjector
 from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
 
 DEFAULT_FPS = 10
@@ -42,13 +43,16 @@ class ShareServer(QObject):
         *,
         approved: ApprovedClients | None = None,
         fps: int = DEFAULT_FPS,
+        injector: InputInjector | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._approve_client = approve_client
         self._approved = approved if approved is not None else ApprovedClients()
         self._fps = fps
+        self._injector = injector if injector is not None else InputInjector()
         self._streams: list[MessageStream] = []
+        self._controllers: set[MessageStream] = set()
         self._server = QTcpServer(self)
         self._server.newConnection.connect(self._on_new_connection)
         self._timer = QTimer(self)
@@ -71,9 +75,13 @@ class ShareServer(QObject):
     def close(self) -> None:
         self._timer.stop()
         for stream in self._streams:
+            # Silence disconnected/error so _drop isn't re-entered during teardown.
+            stream.socket.blockSignals(True)
             stream.socket.abort()
-        if self._streams:
-            self._streams.clear()
+        had_clients = bool(self._streams)
+        self._streams.clear()
+        self._controllers.clear()
+        if had_clients:
             self.clientCountChanged.emit(0)
         self._server.close()
         self.status.emit("Server closed")
@@ -92,6 +100,10 @@ class ShareServer(QObject):
             stream.jsonReceived.connect(lambda m, s=stream: self._on_message(s, m))
 
     def _on_message(self, stream: MessageStream, message: dict) -> None:
+        if message.get("type") == "input":
+            if stream in self._streams:
+                self._inject(stream, message)
+            return
         if message.get("type") != "hello" or stream in self._streams:
             return
         peer = _peer(stream.socket)
@@ -130,7 +142,38 @@ class ShareServer(QObject):
         if not self._timer.isActive():
             self._timer.start()
 
+    def _inject(self, stream: MessageStream, message: dict) -> None:
+        action = message.get("action")
+        x, y = message.get("x"), message.get("y")
+        if stream not in self._controllers:
+            self._controllers.add(stream)
+            if not self._injector.available:
+                self.status.emit(
+                    "Receiving remote input, but injection is unavailable on this platform"
+                )
+            else:
+                self.status.emit(f"Remote input control started from {_peer(stream.socket)}")
+        try:
+            match action:
+                case "move":
+                    self._injector.move(x, y)
+                case "button":
+                    pressed = bool(message.get("pressed"))
+                    name = str(message.get("button"))
+                    self._injector.button(x, y, name, pressed)
+                    self.status.emit(f"Injected {name} button {'down' if pressed else 'up'}")
+                case "wheel":
+                    self._injector.wheel(x, y, int(message.get("dy", 0)))
+                case "key":
+                    pressed = bool(message.get("pressed"))
+                    vk = int(message.get("vk", 0))
+                    self._injector.key(vk, pressed)
+                    self.status.emit(f"Injected key vk={vk} {'down' if pressed else 'up'}")
+        except (TypeError, ValueError) as error:
+            self.status.emit(f"Ignoring malformed input message: {error}")
+
     def _drop(self, stream: MessageStream) -> None:
+        self._controllers.discard(stream)
         if stream not in self._streams:
             self.status.emit("Connection closed before completing hello")
             return
@@ -193,6 +236,10 @@ class ShareClient(QObject):
 
     def close(self) -> None:
         self._socket.abort()
+
+    def send_input(self, event: dict) -> None:
+        if self._socket.state() == QTcpSocket.SocketState.ConnectedState:
+            self._stream.send_json({"type": "input", **event})
 
     def _send_hello(self) -> None:
         self.status.emit(

@@ -17,9 +17,11 @@ This does not use Windows RDP nor rely on any Microsoft-based authentication.
 
 ## Status
 
-Early development. LAN autodiscovery works: a running server appears in the
-client's *Servers* panel. The desktop connection itself (screen, input,
-clipboard) is not implemented yet.
+Early development. Autodiscovery, live screen viewing, and mouse/keyboard
+control work: a running server appears in the client's *Servers* panel;
+opening it (after the server user approves the first connection) shows the
+remote screen, and clicking into the view forwards mouse and keyboard input
+to the server. Clipboard sharing is not implemented yet.
 
 ## Requirements
 
