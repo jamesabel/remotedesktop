@@ -1,9 +1,11 @@
 import time
 
 from PySide6.QtCore import QEventLoop
+from PySide6.QtNetwork import QSslSocket
 
 from remotedesktop import db, tls
 from remotedesktop.config import KnownServers, PairedClients
+from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
 from remotedesktop.sharing import ShareClient, ShareServer
 
 CLIENT_ID = "11111111-1111-1111-1111-111111111111"
@@ -254,6 +256,116 @@ def test_stored_fingerprint_updates_when_server_cert_changes(qapp, credentials, 
     finally:
         client2.close()
         server2.close()
+
+
+def raw_tls_stream(qapp, port):
+    """A protocol-level client: TLS socket + MessageStream, no ShareClient."""
+    sock = QSslSocket()
+    sock.setSslConfiguration(tls.client_configuration())
+    sock.sslErrors.connect(lambda _errors: sock.ignoreSslErrors())
+    stream = MessageStream(sock)
+    sock.connectToHostEncrypted("127.0.0.1", port)
+    pump(qapp, lambda: sock.isEncrypted())
+    return sock, stream
+
+
+def test_incompatible_protocol_version_is_denied(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    events = []
+    server.peerEvent.connect(lambda e: events.append(e["event"]))
+    sock, stream = raw_tls_stream(qapp, server.port)
+    replies = []
+    stream.jsonReceived.connect(replies.append)
+    try:
+        stream.send_json(
+            {"type": "hello", "version": 999, "client_id": "cid-1", "name": "old-client"}
+        )
+        pump(qapp, lambda: replies)
+        assert replies[0] == {"type": "denied", "reason": "incompatible protocol version"}
+        assert "denied" in events
+    finally:
+        sock.abort()
+        server.close()
+
+
+def test_hello_without_client_id_is_aborted(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    statuses = []
+    server.status.connect(statuses.append)
+    sock, stream = raw_tls_stream(qapp, server.port)
+    try:
+        stream.send_json({"type": "hello", "version": PROTOCOL_VERSION, "name": "anon"})
+        pump(qapp, lambda: sock.state() != QSslSocket.SocketState.ConnectedState)
+        assert any("missing client id" in s for s in statuses)
+    finally:
+        sock.abort()
+        server.close()
+
+
+def test_malformed_input_messages_are_ignored(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    statuses = []
+    server.status.connect(statuses.append)
+    client = make_client(tmp_path)
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.send_input({"action": "move"})  # no coordinates
+        client.send_input({"action": "wheel", "x": "bogus", "y": 0.5, "dy": "?"})
+        pump(qapp, lambda: sum("Ignoring malformed input" in s for s in statuses) >= 2)
+    finally:
+        client.close()
+        server.close()
+
+
+def test_listen_fails_on_occupied_port(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    other = ShareServer(
+        approve_client=lambda *_: True,
+        credentials=credentials,
+        paired=PairedClients(db.connect(tmp_path / "other.db")),
+    )
+    statuses = []
+    other.status.connect(statuses.append)
+    try:
+        assert not other.listen(server.port)
+        assert any("Cannot listen" in s for s in statuses)
+    finally:
+        other.close()
+        server.close()
+
+
+def test_revoking_a_disconnected_client_still_marks_inventory(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    events = []
+    server.peerEvent.connect(events.append)
+    try:
+        server.revoke_client("ghost-client")
+        assert events[-1]["event"] == "revoked"
+        assert events[-1]["key"] == "ghost-client"
+    finally:
+        server.close()
+
+
+class _FakeSslError:
+    @staticmethod
+    def errorString() -> str:
+        return "self-signed certificate"
+
+
+def test_disconnected_client_paths_are_noops(qapp, tmp_path):
+    client = make_client(tmp_path)
+    statuses = []
+    client.status.connect(statuses.append)
+    client.send_input({"action": "move", "x": 0.5, "y": 0.5})  # not connected
+    client._send_clipboard({"text": "x"})  # not connected
+    client._on_frame(b"definitely not a jpeg")
+    assert any("undecodable frame" in s for s in statuses)
+    client._on_ssl_errors([_FakeSslError()])
+    assert any("Ignoring expected TLS" in s for s in statuses)
+    client.close()
 
 
 def test_server_reports_phases_in_status(qapp, credentials, tmp_path):

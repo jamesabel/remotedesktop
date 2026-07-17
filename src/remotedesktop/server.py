@@ -2,6 +2,7 @@
 clients and prompts the user to approve first-time connections."""
 
 import socket
+import sqlite3
 import sys
 import time
 
@@ -38,6 +39,7 @@ class ServerWindow(QMainWindow):
         connect_port: int = DEFAULT_CONNECT_PORT,
         paired: PairedClients | None = None,
         credentials=None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Server")
@@ -52,7 +54,8 @@ class ServerWindow(QMainWindow):
         status_layout.addWidget(self._summary)
         status_layout.addWidget(self.connection_log, stretch=1)
 
-        self._db = db.connect(default_db_path())
+        # Tests inject a connection to a temp database; the app uses the default.
+        self._db = connection if connection is not None else db.connect(default_db_path())
         self.inventory = ConnectionInventory(self._db, "server_peers", self)
         tabs = QTabWidget()
         tabs.addTab(status_tab, "Status")
@@ -160,12 +163,12 @@ class ServerWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover - runs the Qt event loop
     app = QApplication(sys.argv)
     window = ServerWindow()
     window.show()
     raise SystemExit(app.exec())
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

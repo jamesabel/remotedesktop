@@ -1,7 +1,25 @@
+import pytest
+
 from remotedesktop import db
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 
 from test_sharing import make_client, make_server, pump
+
+
+def test_unknown_table_is_rejected(qapp):
+    with pytest.raises(ValueError):
+        ConnectionInventory(table="not_a_table")
+
+
+def test_database_errors_never_break_the_inventory(qapp, tmp_path):
+    connection = db.connect(tmp_path / "app.db")
+    connection.close()
+    # Loading from a dead connection yields an empty inventory...
+    inv = ConnectionInventory(connection)
+    assert inv.peers() == []
+    # ...and recording still updates the in-memory state despite save failing.
+    inv.record("peer", "attempt", name="Bob")
+    assert inv.peers()[0].name == "Bob"
 
 
 def test_inventory_tracks_attempts_and_state(qapp):

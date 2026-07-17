@@ -1,6 +1,7 @@
 """Client GUI application: discovers servers on the LAN, connects to one,
 and shows its desktop in a viewer widget."""
 
+import sqlite3
 import sys
 import threading
 import time
@@ -82,10 +83,11 @@ class DiscoveryPanel(QWidget):
 
 
 class ClientWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, connection: sqlite3.Connection | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Client")
-        self._db = db.connect(default_db_path())
+        # Tests inject a connection to a temp database; the app uses the default.
+        self._db = connection if connection is not None else db.connect(default_db_path())
         self.viewer = ViewerWidget(self)
         self.inventory = ConnectionInventory(self._db, "client_peers", self)
         tabs = QTabWidget()
@@ -214,7 +216,7 @@ class ClientWindow(QMainWindow):
             self.inventory.record(self._server_key, "disconnected", name=self._server_name)
         if not self._denied:
             self.viewer.clear("Disconnected")
-        self.statusBar().showMessage(f"Disconnected from {self._server_name}")
+            self.statusBar().showMessage(f"Disconnected from {self._server_name}")
 
     def _on_frame(self, image) -> None:
         self._frame_count += 1
@@ -231,7 +233,7 @@ class ClientWindow(QMainWindow):
         super().closeEvent(event)
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover - runs the Qt event loop
     app = QApplication(sys.argv)
     window = ClientWindow()
     window.show()
@@ -239,5 +241,5 @@ def main() -> None:
     raise SystemExit(app.exec())
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

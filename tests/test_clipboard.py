@@ -1,4 +1,7 @@
-from PySide6.QtCore import QObject, Signal
+import base64
+
+from PySide6.QtCore import QBuffer, QObject, Qt, Signal
+from PySide6.QtGui import QImage
 
 from remotedesktop.clipboard import ClipboardSync
 
@@ -112,4 +115,64 @@ def test_apply_does_not_echo_back(qapp):
         qapp.processEvents()
     assert clip.text() == "applied-value"
     # Applying the remote value must not be re-emitted as a local change.
+    assert emitted == []
+
+
+def _red_image() -> QImage:
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.red)
+    return image
+
+
+def test_local_image_copy_is_encoded_as_png(qapp):
+    clip = qapp.clipboard()
+    sync = ClipboardSync(clip)
+    emitted: list[dict] = []
+    sync.changed.connect(emitted.append)
+    clip.setImage(_red_image())
+    pump(qapp, lambda: emitted)
+    encoded = emitted[-1]["image_png"]
+    decoded = QImage.fromData(base64.b64decode(encoded), "PNG")  # ty: ignore[invalid-argument-type]
+    assert decoded.pixelColor(0, 0).name() == "#ff0000"
+
+
+def test_apply_image_payload_sets_clipboard_image(qapp):
+    clip = qapp.clipboard()
+    sync = ClipboardSync(clip)
+    buffer = QBuffer()
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    _red_image().save(buffer, "PNG")  # ty: ignore[no-matching-overload]
+    payload = {
+        "type": "clipboard",
+        "text": "caption",
+        "image_png": base64.b64encode(
+            bytes(buffer.data())  # ty: ignore[invalid-argument-type]
+        ).decode(),
+    }
+    sync.apply(payload)
+    assert clip.image().pixelColor(0, 0).name() == "#ff0000"
+    # Both halves of a text+image payload survive the round trip.
+    assert clip.text() == "caption"
+    # Re-applying the identical payload is a no-op (signature match).
+    sync.apply(payload)
+
+
+def test_apply_ignores_garbage_payloads(qapp):
+    clip = qapp.clipboard()
+    clip.setText("before")
+    for _ in range(10):
+        qapp.processEvents()
+    sync = ClipboardSync(clip)
+    sync.apply({"type": "clipboard"})
+    sync.apply({"type": "clipboard", "image_png": "!!! not base64 !!!"})
+    sync.apply({"type": "clipboard", "text": 42})
+    assert clip.text() == "before"
+
+
+def test_data_changed_while_applying_is_ignored(qapp):
+    sync = ClipboardSync(qapp.clipboard())
+    emitted: list[dict] = []
+    sync.changed.connect(emitted.append)
+    sync._applying = True
+    sync._on_data_changed()
     assert emitted == []

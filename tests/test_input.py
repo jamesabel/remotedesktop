@@ -1,6 +1,6 @@
 import pytest
-from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QFocusEvent, QImage, QKeyEvent, QMouseEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent
 
 from remotedesktop.viewer import ViewerWidget
 
@@ -174,3 +174,62 @@ def test_viewer_ignores_input_outside_frame(qapp):
     )
     viewer.mouseMoveEvent(outside)
     assert events == []
+
+
+def test_viewer_forwards_wheel_and_key_release(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    wheel = QWheelEvent(
+        QPointF(200, 200), QPointF(200, 200), QPoint(0, 0), QPoint(0, -120),
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase, False,
+    )
+    viewer.wheelEvent(wheel)
+    assert events[-1] == {
+        "action": "wheel", "dy": -120,
+        "x": pytest.approx(0.5, abs=0.01), "y": pytest.approx(0.5, abs=0.01),
+    }
+    viewer.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, 0, 65, 0)
+    )
+    viewer.keyReleaseEvent(
+        QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, 0, 65, 0)
+    )
+    assert events[-1] == {"action": "key", "vk": 65, "pressed": False}
+    assert viewer._pressed_keys == set()
+    # Keys without a native VK (rare synthetic events) are dropped.
+    viewer.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, 0, 0, 0)
+    )
+    assert events[-1]["pressed"] is False
+
+
+def test_release_when_frame_vanished_mid_drag(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    viewer.mousePressEvent(_mouse_event(QEvent.Type.MouseButtonPress, QPointF(200, 200)))
+    viewer._frame = None  # frame dropped mid-drag; server releases on drop
+    viewer.mouseReleaseEvent(_mouse_event(QEvent.Type.MouseButtonRelease, QPointF(200, 200)))
+    assert [e["pressed"] for e in events] == [True]
+
+
+def test_viewer_paints_message_and_frame(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    assert not viewer.has_frame
+    blank = viewer.grab()  # paints the "Not connected" message branch
+    assert not blank.isNull()
+    image = QImage(200, 100, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.red)
+    viewer.show_frame(image)
+    assert viewer.has_frame
+    painted = viewer.grab().toImage()  # paints the frame branch
+    assert painted.pixelColor(200, 200).red() > 200  # frame center is red
+    viewer.clear("gone")
+    assert not viewer.has_frame
