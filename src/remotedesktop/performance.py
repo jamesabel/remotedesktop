@@ -438,14 +438,15 @@ class PerformanceTab(QWidget):
             format_rate,
             tick_unit=rate_unit,
         )
-        # Each line is named for the side that sent the ping, so the same
-        # line has the same name in both apps ("client → server" is the
-        # client-measured round trip on either end).
+        # Each line is a full round trip named for the side that sent the
+        # ping, with the whole loop spelled out — "client → server" alone
+        # read as a one-way leg and had users looking for a "total" line.
+        # One-way legs aren't measurable without synchronized clocks.
         self.ping_graph = GraphWidget(
             "Round-trip time",
             [
-                (f"{local} → {remote}", QColor("#ff9800"), monitor.rtt_ms),
-                (f"{remote} → {local}", QColor("#9c27b0"), monitor.peer_rtt_ms),
+                (f"{local} → {remote} → {local}", QColor("#ff9800"), monitor.rtt_ms),
+                (f"{remote} → {local} → {remote}", QColor("#9c27b0"), monitor.peer_rtt_ms),
             ],
             monitor,
             format_ms,
