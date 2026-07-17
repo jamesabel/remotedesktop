@@ -43,6 +43,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           $blob = (git hash-object -w badges/coverage.svg).Trim()
-          $tree = ("100644 blob $blob`tcoverage.svg" | git mktree).Trim()
+          # Build the tree via a temp index, not `... | git mktree`: PowerShell
+          # pipes CRLF to native stdin, which puts a literal \r in the filename.
+          $env:GIT_INDEX_FILE = "$env:RUNNER_TEMP\badge-index"
+          git update-index --add --cacheinfo "100644,$blob,coverage.svg"
+          $tree = (git write-tree).Trim()
+          Remove-Item Env:\GIT_INDEX_FILE
           $commit = (git commit-tree $tree -m "Update coverage badge").Trim()
           git push --force origin "${commit}:refs/heads/badges"
