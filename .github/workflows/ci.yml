@@ -40,6 +40,8 @@ jobs:
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: |
           uv run python scripts/make_coverage_badge.py badges/coverage.svg
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           $blob = (git hash-object -w badges/coverage.svg).Trim()
           $tree = ("100644 blob $blob`tcoverage.svg" | git mktree).Trim()
           $commit = (git commit-tree $tree -m "Update coverage badge").Trim()
