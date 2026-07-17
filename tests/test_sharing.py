@@ -3,7 +3,7 @@ import time
 
 from PySide6.QtCore import QEventLoop
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtNetwork import QSslSocket
+from PySide6.QtNetwork import QAbstractSocket, QSslSocket
 
 from remotedesktop import db, tls
 from remotedesktop.config import KnownServers, PairedClients
@@ -397,6 +397,22 @@ def test_disconnected_client_paths_are_noops(qapp, tmp_path):
     client._on_ssl_errors([_FakeSslError()])
     assert any("Ignoring expected TLS" in s for s in statuses)
     client.close()
+
+
+def test_low_delay_is_set_on_both_ends(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    client = make_client(tmp_path)
+    names = []
+    client.connected.connect(names.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: names and server._streams)
+        option = QAbstractSocket.SocketOption.LowDelayOption
+        assert client._socket.socketOption(option) == 1
+        assert server._streams[0].socket.socketOption(option) == 1
+    finally:
+        client.close()
+        server.close()
 
 
 def solid_image(color, *, width=64, height=128):

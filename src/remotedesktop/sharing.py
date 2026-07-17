@@ -22,6 +22,7 @@ from typing import cast
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtNetwork import (
+    QAbstractSocket,
     QHostAddress,
     QSslCertificate,
     QSslKey,
@@ -44,7 +45,10 @@ from remotedesktop import db, tls
 
 _log = logging.getLogger("remotedesktop.sharing")
 
-DEFAULT_FPS = 10
+# 30 fps keeps key-to-glyph latency low (~17 ms average sampling delay).
+# Affordable since inter-frame compression: an unchanged screen costs only
+# a capture and a memory compare per tick — nothing is encoded or sent.
+DEFAULT_FPS = 30
 # Only for full frames to legacy (0.5.0) clients, which force-decode frames
 # as JPEG. Delta-capable clients get lossless PNG keyframes and delta bands.
 JPEG_QUALITY = 70
@@ -173,6 +177,9 @@ class ShareServer(QObject):
         while self._server.hasPendingConnections():
             # QSslServer hands out QSslSockets; the stubs say QTcpSocket.
             sock = cast(QSslSocket, self._server.nextPendingConnection())
+            # TCP_NODELAY: input events and delta frames are small messages;
+            # Nagle + delayed ACK would add tens to hundreds of ms of latency.
+            sock.setSocketOption(QAbstractSocket.SocketOption.LowDelayOption, 1)
             self.status.emit(
                 f"Incoming TLS connection from {_peer(sock)} "
                 f"(encrypted={sock.isEncrypted()}) — waiting for hello"
@@ -568,6 +575,9 @@ class ShareClient(QObject):
         self._socket.ignoreSslErrors()
 
     def _on_encrypted(self) -> None:
+        # TCP_NODELAY (settable only once connected): keystrokes are tiny
+        # messages; Nagle + delayed ACK would add tens to hundreds of ms.
+        self._socket.setSocketOption(QAbstractSocket.SocketOption.LowDelayOption, 1)
         cert = self._socket.peerCertificate()
         fingerprint = "" if cert.isNull() else tls.certificate_fingerprint(cert)
         self._server_fingerprint = fingerprint
