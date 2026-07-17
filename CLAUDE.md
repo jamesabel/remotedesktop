@@ -8,7 +8,7 @@ A Python client/server remote desktop GUI application (PySide6) for Windows comp
 
 - **Autodiscovery and connection** of servers on the LAN.
 - **In scope:** desktop screen, keyboard, mouse, and clipboard.
-- **Out of scope:** shared drives, devices, and multimedia (e.g., audio).
+- **Out of scope:** shared drives, devices, and multimedia (e.g., audio). Smooth playback of fast-changing full-screen content (video, games) is a non-goal: the screen transfer is lossless and optimized for mostly-static desktop work, not for video bandwidth.
 - **Two GUI apps:** a client and a server, each run on its respective computer.
 - **Trust model:** on first connection, the user on the server side must explicitly permit the client. After that, the client may reconnect whenever the server is running without further approval.
 - **Constraint:** does not use Windows RDP and does not rely on any Microsoft-based authentication.
