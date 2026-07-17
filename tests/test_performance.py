@@ -356,14 +356,15 @@ def test_rtt_lines_are_named_for_the_side_that_pings(qapp):
     client_tab = PerformanceTab(monitor, local="client", remote="server")
     server_tab = PerformanceTab(monitor, local="server", remote="client")
     # This side's own measurement (rtt_ms) is listed first; the same physical
-    # measurement carries the same name in both apps.
+    # measurement carries the same name in both apps, and each label spells
+    # out the full loop so it can't be read as a one-way leg.
     assert [label for label, _c, series in client_tab.ping_graph._series] == [
-        "client → server",
-        "server → client",
+        "client → server → client",
+        "server → client → server",
     ]
     assert [label for label, _c, series in server_tab.ping_graph._series] == [
-        "server → client",
-        "client → server",
+        "server → client → server",
+        "client → server → client",
     ]
 
 
