@@ -40,6 +40,7 @@ from remotedesktop.config import (
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop import frames
 from remotedesktop.input_injection import InputInjector
+from remotedesktop.performance import PerformanceMonitor
 from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
 from remotedesktop import db, tls
 
@@ -87,9 +88,11 @@ class ShareServer(QObject):
         fps: int = DEFAULT_FPS,
         injector: InputInjector | None = None,
         clipboard=None,
+        performance: PerformanceMonitor | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
+        self._performance = performance
         self._approve_client = approve_client
         self._paired = paired if paired is not None else PairedClients(db.connect(default_db_path()))
         self._fps = fps
@@ -170,6 +173,8 @@ class ShareServer(QObject):
         self._previous_frame = None
         if had_clients:
             self.clientCountChanged.emit(0)
+        if self._performance is not None:
+            self._performance.reset()
         self._server.close()
         self.status.emit("Server closed")
 
@@ -198,6 +203,11 @@ class ShareServer(QObject):
             stream.jsonReceived.connect(lambda m, s=stream: self._on_message(s, m))
 
     def _on_message(self, stream: MessageStream, message: dict) -> None:
+        if message.get("type") in ("ping", "pong"):
+            # Same admission rule as input/clipboard: pre-auth peers get nothing.
+            if stream in self._streams and self._performance is not None:
+                self._performance.handle_message(stream, message)
+            return
         if message.get("type") == "input":
             if stream in self._streams:
                 self._inject(stream, message)
@@ -330,6 +340,8 @@ class ShareServer(QObject):
         stream.send_json(welcome)
         self._needs_keyframe.add(stream)  # its first frame must be a full one
         self._streams.append(stream)
+        if self._performance is not None:
+            self._performance.add_stream(stream)
         self.clientCountChanged.emit(len(self._streams))
         self.status.emit(
             f'Streaming screen to "{client_name}" at {self._fps} fps '
@@ -396,6 +408,10 @@ class ShareServer(QObject):
             stream.send_json(message)
 
     def _drop(self, stream: MessageStream) -> None:
+        # Detach from the monitor before the deferred delete below, so it
+        # never samples a deleted stream (idempotent for never-admitted ones).
+        if self._performance is not None:
+            self._performance.remove_stream(stream)
         self._controllers.discard(stream)
         self._all_streams.discard(stream)
         self._prompting.discard(stream)
@@ -511,9 +527,11 @@ class ShareClient(QObject):
         *,
         known_servers: KnownServers | None = None,
         clipboard=None,
+        performance: PerformanceMonitor | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
+        self._performance = performance
         self._client_id, self._name = identity or load_client_identity(
             db.connect(default_db_path())
         )
@@ -545,6 +563,9 @@ class ShareClient(QObject):
 
     def connect_to(self, host: str, port: int) -> None:
         self._socket.abort()  # drop any previous connection or attempt
+        if self._performance is not None:
+            # abort() emits no disconnected signal, so detach explicitly.
+            self._performance.remove_stream(self._stream)
         self._got_first_frame = False
         self._frame_count = 0
         self._last_image = None
@@ -600,6 +621,8 @@ class ShareClient(QObject):
         self._stream.send_json(hello)
 
     def _on_disconnected(self) -> None:
+        if self._performance is not None:
+            self._performance.remove_stream(self._stream)
         self.status.emit("Disconnected from server")
         self.disconnected.emit()
 
@@ -626,6 +649,11 @@ class ShareClient(QObject):
                     f'Server "{name}" accepted the connection — waiting for first frame'
                 )
                 self.connected.emit(name)
+                if self._performance is not None:
+                    # Attach only once admitted: handshake traffic is never
+                    # sampled and no ping goes to a server that hasn't
+                    # welcomed us.
+                    self._performance.add_stream(self._stream)
             case "pending":
                 self.status.emit(
                     "Server is asking its user for permission — waiting for approval"
@@ -639,6 +667,9 @@ class ShareClient(QObject):
                 if self._clipboard is not None:
                     self.status.emit("Clipboard update received from server")
                     self._clipboard.apply(message)
+            case "ping" | "pong":
+                if self._performance is not None:
+                    self._performance.handle_message(self._stream, message)
 
     def _on_frame(self, data: bytes) -> None:
         # Full frame — PNG keyframe or (legacy servers) JPEG; sniffed from

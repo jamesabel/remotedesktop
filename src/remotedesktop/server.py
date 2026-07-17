@@ -32,6 +32,8 @@ from remotedesktop.discovery import (
     DiscoveryResponder,
 )
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
+from remotedesktop.performance import PerformanceMonitor, PerformanceTab
+from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
 from remotedesktop.sharing import ShareServer
 
 _log = logging.getLogger("remotedesktop.server")
@@ -77,6 +79,11 @@ class ServerWindow(QMainWindow):
 
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
+        self._settings = Settings(self._db)
+        self.performance = PerformanceMonitor(
+            window_seconds=float(load_performance_window_seconds(self._settings)),
+            parent=self,
+        )
         self.inventory = ConnectionInventory(self._db, "server_peers", self)
         tabs = QTabWidget()
         tabs.addTab(status_tab, "Status")
@@ -84,7 +91,9 @@ class ServerWindow(QMainWindow):
             InventoryTab(self.inventory, "Revoke access", self._revoke_client),
             "Clients on LAN",
         )
+        tabs.addTab(PerformanceTab(self.performance), "Performance")
         tabs.addTab(self.connection_log, "Connection log")
+        tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
         self.setCentralWidget(tabs)
 
         if credentials is None:
@@ -100,6 +109,7 @@ class ServerWindow(QMainWindow):
             credentials=credentials,
             paired=paired,
             clipboard=self._clipboard,
+            performance=self.performance,
             parent=self,
         )
         self.share_server.status.connect(self.log)
@@ -128,7 +138,6 @@ class ServerWindow(QMainWindow):
                     f"(UDP port {discovery_port}, TCP port {self.share_server.port})"
                 )
         self._update_summary(0)
-        self._settings = Settings(self._db)
         window_state.restore_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
 
     def log(self, message: str) -> None:
