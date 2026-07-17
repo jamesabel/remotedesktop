@@ -1,0 +1,36 @@
+[project]
+name = "remotedesktop"
+dynamic = ["version"]
+description = "Remote desktop client/server for Windows computers on the same LAN, with autodiscovery. Provides screen, keyboard, mouse, and clipboard sharing without RDP or Microsoft authentication."
+readme = "readme.md"
+license = "MIT"
+authors = [{ name = "James Abel", email = "j@abel.co" }]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking",
+]
+dependencies = []
+
+[project.scripts]
+remotedesktop-client = "remotedesktop.client:main"
+remotedesktop-server = "remotedesktop.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/remotedesktop/__init__.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
