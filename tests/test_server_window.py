@@ -39,6 +39,7 @@ def test_window_listens_and_is_discoverable(qapp, credentials, tmp_path):
         labels = [tabs.tabText(i) for i in range(tabs.count())]
         assert "Performance" in labels and "Preferences" in labels
         assert not window.performance._timer.isActive()  # idle: no periodic work
+        assert not window.windowIcon().isNull()
     finally:
         window.close()
 

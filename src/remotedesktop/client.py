@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, logs, window_state
+from remotedesktop import db, icon, logs, window_state
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
@@ -93,6 +93,7 @@ class ClientWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Client")
+        self.setWindowIcon(icon.app_icon("client"))
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
         self._settings = Settings(self._db)
@@ -264,7 +265,9 @@ class ClientWindow(QMainWindow):
 
 def main() -> None:  # pragma: no cover - runs the Qt event loop
     log_path = logs.init_logging("client")
+    icon.set_windows_app_id("remotedesktop.client")
     app = QApplication(sys.argv)
+    app.setWindowIcon(icon.app_icon("client"))
     window = ClientWindow()  # auto_scan starts the first LAN scan
     window.log(f"Detailed log: {log_path}")
     window.show()
