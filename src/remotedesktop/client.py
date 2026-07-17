@@ -111,9 +111,7 @@ class ClientWindow(QMainWindow):
         self.connection_log = QPlainTextEdit(self)
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
-        log_dock = QDockWidget("Connection log", self)
-        log_dock.setWidget(self.connection_log)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
+        tabs.addTab(self.connection_log, "Connection log")
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
         self.discovery_panel.serversFound.connect(self._record_discovered)
