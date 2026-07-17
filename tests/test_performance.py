@@ -216,6 +216,115 @@ def test_old_peer_leaves_rtt_series_empty(qapp, credentials, tmp_path):
         server.close()
 
 
+def arm(monitor: PerformanceMonitor, stream: FakeStream, clock: FakeClock) -> None:
+    """Answer a ping (proving the peer responsive) and tick again so the
+    pong's bytes are observed — the silence deadline starts fresh from here."""
+    monitor._on_tick()
+    stream.bytes_received += 10  # the pong's bytes arriving
+    monitor.handle_message(stream, {"type": "pong", "id": stream.sent[-1]["id"]})
+    clock.advance(1.0)
+    monitor._on_tick()
+
+
+def test_connection_lost_after_responsive_peer_goes_silent(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(dead_after_seconds=10.0, clock=clock)
+    stream = FakeStream()
+    lost = []
+    monitor.connectionLost.connect(lost.append)
+    monitor.add_stream(stream)
+    arm(monitor, stream, clock)
+    clock.advance(9.0)
+    monitor._on_tick()  # bytes arrived 9 s ago: within the deadline
+    assert lost == []
+    clock.advance(2.0)
+    monitor._on_tick()  # 11 s of silence
+    assert lost == [stream]
+    clock.advance(5.0)
+    monitor._on_tick()  # reported once, not on every subsequent tick
+    assert lost == [stream]
+
+
+def test_incoming_data_defers_connection_lost(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(dead_after_seconds=10.0, clock=clock)
+    stream = FakeStream()
+    lost = []
+    monitor.connectionLost.connect(lost.append)
+    monitor.add_stream(stream)
+    arm(monitor, stream, clock)
+    for _ in range(4):  # 24 s total, but data keeps arriving every 6 s
+        clock.advance(6.0)
+        stream.bytes_received += 1
+        monitor._on_tick()
+    assert lost == []
+
+
+def test_incoming_ping_also_arms_the_detector(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(dead_after_seconds=10.0, clock=clock)
+    stream = FakeStream()
+    lost = []
+    monitor.connectionLost.connect(lost.append)
+    monitor.add_stream(stream)
+    monitor.handle_message(stream, {"type": "ping", "id": 1})
+    clock.advance(11.0)
+    monitor._on_tick()
+    assert lost == [stream]
+
+
+def test_silent_legacy_peer_is_never_reported_lost(qapp):
+    # A peer that never answered a ping (pre-0.9 server) must never trip the
+    # detector: its silence on a static screen is indistinguishable from life.
+    clock = FakeClock()
+    monitor = PerformanceMonitor(dead_after_seconds=10.0, clock=clock)
+    stream = FakeStream()
+    lost = []
+    monitor.connectionLost.connect(lost.append)
+    monitor.add_stream(stream)
+    for _ in range(10):
+        clock.advance(60.0)
+        monitor._on_tick()
+    assert lost == []
+
+
+def test_reattaching_a_stream_resets_the_detector(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(dead_after_seconds=10.0, clock=clock)
+    stream = FakeStream()
+    lost = []
+    monitor.connectionLost.connect(lost.append)
+    monitor.add_stream(stream)
+    arm(monitor, stream, clock)
+    clock.advance(11.0)
+    monitor._on_tick()
+    assert lost == [stream]
+    # A reconnect detaches and reattaches: the new session starts unarmed
+    # with a fresh deadline, so the stale silence is not reported again.
+    monitor.remove_stream(stream)
+    monitor.add_stream(stream)
+    clock.advance(60.0)
+    monitor._on_tick()
+    assert lost == [stream]
+
+
+def test_share_client_drops_the_connection_on_lost_signal(qapp, tmp_path):
+    monitor = PerformanceMonitor()
+    client = ShareClient(
+        identity=IDENTITY,
+        known_servers=KnownServers(db.connect(tmp_path / "client.db")),
+        performance=monitor,
+    )
+    statuses, disconnects = [], []
+    client.status.connect(statuses.append)
+    client.disconnected.connect(lambda: disconnects.append(True))
+    monitor.connectionLost.emit(FakeStream())  # someone else's stream: ignored
+    assert disconnects == []
+    monitor.connectionLost.emit(client._stream)
+    assert disconnects == [True]
+    assert any("Connection lost" in s and "10 s" in s for s in statuses)
+
+
 def test_graph_widgets_render_headless(qapp):
     seeded = PerformanceMonitor()
     seeded.send_bps.add(100.0)

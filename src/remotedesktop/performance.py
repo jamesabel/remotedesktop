@@ -8,6 +8,15 @@ piggybacks the latest measurement on its next ping (`"rtt"`), so both ends can
 graph both directions. Peers that predate this feature simply never answer
 pings — the RTT series stay empty and nothing else is affected.
 
+The same machinery doubles as dead-connection detection: once the active
+stream's peer has proven it answers pings, a peer that then goes completely
+silent (no bytes received at all) for `dead_after_seconds` is presumed gone
+and `connectionLost` is emitted, once. A half-open TCP connection is otherwise
+invisible here — an unchanged screen legitimately sends nothing, so a frozen
+last frame looks exactly like a live static desktop. Peers that never answered
+a ping (pre-feature versions) never arm the detector, so they are never
+falsely reported.
+
 Wire messages (JSON, admitted streams only):
     {"type": "ping", "id": <int>, "rtt": <ms, omitted before first measurement>}
     {"type": "pong", "id": <int>}   # pure echo
@@ -46,6 +55,7 @@ class StreamLike(Protocol):
 
 DEFAULT_WINDOW_SECONDS = 120.0
 DEFAULT_INTERVAL_MS = 1000
+DEFAULT_DEAD_AFTER_SECONDS = 10.0
 _PING_PRUNE_SECONDS = 30.0
 _HEARTBEAT_TICKS = 10  # one debug-log line per this many samples
 
@@ -93,18 +103,21 @@ class PerformanceMonitor(QObject):
     """
 
     updated = Signal()  # one emit per sample tick
+    connectionLost = Signal(object)  # the active stream whose responsive peer went silent
 
     def __init__(
         self,
         *,
         window_seconds: float = DEFAULT_WINDOW_SECONDS,
         interval_ms: int = DEFAULT_INTERVAL_MS,
+        dead_after_seconds: float = DEFAULT_DEAD_AFTER_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._clock = clock
         self._window = window_seconds
+        self._dead_after = dead_after_seconds
         self.send_bps = MetricSeries(window_seconds, clock=clock)
         self.recv_bps = MetricSeries(window_seconds, clock=clock)
         self.rtt_ms = MetricSeries(window_seconds, clock=clock)
@@ -112,6 +125,12 @@ class PerformanceMonitor(QObject):
         self._streams: list[StreamLike] = []
         self._baselines: dict[StreamLike, tuple[int, int]] = {}
         self._active: StreamLike | None = None
+        # Dead-connection detection, all scoped to the active stream: when its
+        # bytes_received counter last grew, whether its peer ever answered a
+        # ping (arms the detector), and whether a loss was already reported.
+        self._last_data: float | None = None
+        self._peer_responsive = False
+        self._lost_reported = False
         self._pending: dict[int, float] = {}
         self._ids = itertools.count(1)
         self._last_tick: float | None = None
@@ -124,6 +143,10 @@ class PerformanceMonitor(QObject):
     def window_seconds(self) -> float:
         return self._window
 
+    @property
+    def dead_after_seconds(self) -> float:
+        return self._dead_after
+
     def set_window_seconds(self, window_seconds: float) -> None:
         self._window = window_seconds
         for series in (self.send_bps, self.recv_bps, self.rtt_ms, self.peer_rtt_ms):
@@ -133,7 +156,7 @@ class PerformanceMonitor(QObject):
         if stream not in self._baselines:
             self._streams.append(stream)
         self._baselines[stream] = (stream.bytes_sent, stream.bytes_received)
-        self._active = stream
+        self._activate(stream)
         if not self._timer.isActive():
             self._last_tick = None
             self._timer.start()
@@ -144,11 +167,17 @@ class PerformanceMonitor(QObject):
         self._streams.remove(stream)
         del self._baselines[stream]
         if self._active is stream:
-            self._active = self._streams[-1] if self._streams else None
+            self._activate(self._streams[-1] if self._streams else None)
         if not self._streams:
             self._timer.stop()
             self._pending.clear()
             self._last_tick = None
+
+    def _activate(self, stream: StreamLike | None) -> None:
+        self._active = stream
+        self._last_data = self._clock() if stream is not None else None
+        self._peer_responsive = False
+        self._lost_reported = False
 
     def reset(self) -> None:
         """Detach everything and clear the graphs (new connection attempt)."""
@@ -162,9 +191,15 @@ class PerformanceMonitor(QObject):
             case "ping":
                 stream.send_json({"type": "pong", "id": message.get("id")})
                 rtt = message.get("rtt")
-                if isinstance(rtt, (int, float)) and stream is self._active:
-                    self.peer_rtt_ms.add(float(rtt))
+                if stream is self._active:
+                    # A peer that pings us runs this feature too — that arms
+                    # the silence detector just as well as a pong does.
+                    self._peer_responsive = True
+                    if isinstance(rtt, (int, float)):
+                        self.peer_rtt_ms.add(float(rtt))
             case "pong":
+                if stream is self._active:
+                    self._peer_responsive = True
                 ping_id = message.get("id")
                 if isinstance(ping_id, int):
                     sent = self._pending.pop(ping_id, None)
@@ -178,6 +213,8 @@ class PerformanceMonitor(QObject):
             base_sent, base_received = self._baselines[stream]
             delta_sent += stream.bytes_sent - base_sent
             delta_received += stream.bytes_received - base_received
+            if stream is self._active and stream.bytes_received > base_received:
+                self._last_data = now
             self._baselines[stream] = (stream.bytes_sent, stream.bytes_received)
         if self._last_tick is not None and (elapsed := now - self._last_tick) > 0:
             self.send_bps.add(delta_sent / elapsed)
@@ -193,6 +230,20 @@ class PerformanceMonitor(QObject):
             if (rtt := self.rtt_ms.latest()) is not None:
                 ping["rtt"] = rtt
             self._active.send_json(ping)
+
+            if (
+                self._peer_responsive
+                and not self._lost_reported
+                and self._last_data is not None
+                and now - self._last_data > self._dead_after
+            ):
+                self._lost_reported = True
+                _log.warning(
+                    "No data from the peer for %.0f s (pings unanswered) — "
+                    "connection presumed lost",
+                    now - self._last_data,
+                )
+                self.connectionLost.emit(self._active)
 
         self._tick_count += 1
         if self._tick_count % _HEARTBEAT_TICKS == 0:
