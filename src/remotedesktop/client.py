@@ -3,20 +3,24 @@ and shows its desktop in a viewer widget."""
 
 import sys
 import threading
+import time
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from remotedesktop.discovery import ServerInfo, discover_servers
+from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
+from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
 
 
@@ -24,6 +28,7 @@ class DiscoveryPanel(QWidget):
     """Scans the LAN for servers and lists them for the user to pick."""
 
     serverActivated = Signal(ServerInfo)
+    status = Signal(str)
     _scanFinished = Signal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -40,6 +45,7 @@ class DiscoveryPanel(QWidget):
     def refresh(self) -> None:
         self._refresh_button.setEnabled(False)
         self._refresh_button.setText("Scanning…")
+        self.status.emit(f"Scanning LAN (UDP broadcast to port {DISCOVERY_PORT}) …")
         threading.Thread(target=self._scan, name="discovery-scan", daemon=True).start()
 
     def _scan(self) -> None:
@@ -58,6 +64,8 @@ class DiscoveryPanel(QWidget):
             item = QListWidgetItem(f"{server.name} ({server.host}:{server.port})")
             item.setData(Qt.ItemDataRole.UserRole, server)
             self.server_list.addItem(item)
+        found = ", ".join(f"{s.name} at {s.host}:{s.port}" for s in servers)
+        self.status.emit(f"Scan finished — found: {found}" if servers else "Scan finished — no servers found")
 
     def _on_item_activated(self, item: QListWidgetItem) -> None:
         self.serverActivated.emit(item.data(Qt.ItemDataRole.UserRole))
@@ -69,16 +77,73 @@ class ClientWindow(QMainWindow):
         self.setWindowTitle("Remote Desktop Client")
         self.viewer = ViewerWidget(self)
         self.setCentralWidget(self.viewer)
+
         self.discovery_panel = DiscoveryPanel(self)
-        dock = QDockWidget("Servers", self)
-        dock.setWidget(self.discovery_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        servers_dock = QDockWidget("Servers", self)
+        servers_dock.setWidget(self.discovery_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, servers_dock)
+
+        self.connection_log = QPlainTextEdit(self)
+        self.connection_log.setReadOnly(True)
+        self.connection_log.setMaximumBlockCount(1000)
+        log_dock = QDockWidget("Connection log", self)
+        log_dock.setWidget(self.connection_log)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
+
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
+        self.discovery_panel.status.connect(self.log)
+
+        self._client: ShareClient | None = None
+        self._server_name = ""
+        self._frame_count = 0
+        self.statusBar().showMessage("Not connected")
+        self.log("Client started")
+
+    def log(self, message: str) -> None:
+        self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
     def _on_server_activated(self, server: ServerInfo) -> None:
+        if self._client is not None:
+            self.log("Closing previous connection")
+            self._client.close()
+            self._client.deleteLater()
+        self._server_name = server.name
+        self._frame_count = 0
+        client = ShareClient(parent=self)
+        self._client = client
+        client.status.connect(self.log)
+        client.connected.connect(self._on_connected)
+        client.denied.connect(self._on_denied)
+        client.disconnected.connect(self._on_disconnected)
+        client.frameReceived.connect(self._on_frame)
+        self.viewer.clear(f"Connecting to {server.name} …")
+        self.statusBar().showMessage(f"Connecting to {server.name} ({server.host}:{server.port}) …")
+        client.connect_to(server.host, server.port)
+
+    def _on_connected(self, server_name: str) -> None:
+        self._server_name = server_name or self._server_name
+        self.statusBar().showMessage(f"Connected to {self._server_name} — waiting for first frame")
+
+    def _on_denied(self, reason: str) -> None:
+        self.viewer.clear(f"Connection denied: {reason}")
+        self.statusBar().showMessage(f"Denied by {self._server_name}: {reason}")
+
+    def _on_disconnected(self) -> None:
+        self.viewer.clear("Disconnected")
+        self.statusBar().showMessage(f"Disconnected from {self._server_name}")
+
+    def _on_frame(self, image) -> None:
+        self._frame_count += 1
+        self.viewer.show_frame(image)
         self.statusBar().showMessage(
-            f"Connecting to {server.name} ({server.host}:{server.port}) is not implemented yet"
+            f"Viewing {self._server_name} — {image.width()}x{image.height()} — "
+            f"{self._frame_count} frames received"
         )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._client is not None:
+            self._client.close()
+        super().closeEvent(event)
 
 
 def main() -> None:

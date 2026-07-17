@@ -2,6 +2,7 @@ import socket
 
 import remotedesktop
 from remotedesktop.client import ClientWindow, DiscoveryPanel
+from remotedesktop.config import ApprovedClients
 from remotedesktop.discovery import ServerInfo, discover_servers
 from remotedesktop.server import ServerWindow
 from remotedesktop.viewer import ViewerWidget
@@ -27,13 +28,29 @@ def test_discovery_panel_lists_servers(qapp) -> None:
     assert "testbox" in panel.server_list.item(0).text()
 
 
-def test_server_window_is_discoverable(qapp) -> None:
+def test_server_window_is_discoverable(qapp, tmp_path) -> None:
     port = free_udp_port()
-    window = ServerWindow(discovery_port=port)
+    window = ServerWindow(
+        discovery_port=port,
+        connect_port=0,
+        approved=ApprovedClients(tmp_path / "approved.json"),
+    )
     try:
         servers = discover_servers(
             timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
         )
         assert [s.name for s in servers] == [socket.gethostname()]
+        assert servers[0].port == window.share_server.port
     finally:
         window.close()
+
+
+def test_viewer_widget_shows_and_clears_frames(qapp) -> None:
+    from PySide6.QtGui import QImage
+
+    viewer = ViewerWidget()
+    assert not viewer.has_frame
+    viewer.show_frame(QImage(8, 8, QImage.Format.Format_RGB32))
+    assert viewer.has_frame
+    viewer.clear("gone")
+    assert not viewer.has_frame
