@@ -16,7 +16,7 @@ def test_version() -> None:
 
 def test_client_window_hosts_viewer(qapp) -> None:
     window = ClientWindow()
-    assert isinstance(window.centralWidget(), ViewerWidget)
+    assert isinstance(window.viewer, ViewerWidget)
     assert isinstance(window.discovery_panel, DiscoveryPanel)
 
 

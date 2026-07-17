@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
+from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
 
@@ -30,6 +32,7 @@ class DiscoveryPanel(QWidget):
     """Scans the LAN for servers and lists them for the user to pick."""
 
     serverActivated = Signal(ServerInfo)
+    serversFound = Signal(list)
     status = Signal(str)
     _scanFinished = Signal(list)
 
@@ -66,6 +69,7 @@ class DiscoveryPanel(QWidget):
             item = QListWidgetItem(f"{server.name} ({server.host}:{server.port})")
             item.setData(Qt.ItemDataRole.UserRole, server)
             self.server_list.addItem(item)
+        self.serversFound.emit(servers)
         found = ", ".join(f"{s.name} at {s.host}:{s.port}" for s in servers)
         self.status.emit(f"Scan finished — found: {found}" if servers else "Scan finished — no servers found")
 
@@ -78,7 +82,11 @@ class ClientWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Remote Desktop Client")
         self.viewer = ViewerWidget(self)
-        self.setCentralWidget(self.viewer)
+        self.inventory = ConnectionInventory(self)
+        tabs = QTabWidget()
+        tabs.addTab(self.viewer, "Remote Screen")
+        tabs.addTab(InventoryTab(self.inventory), "Servers on LAN")
+        self.setCentralWidget(tabs)
 
         self.discovery_panel = DiscoveryPanel(self)
         servers_dock = QDockWidget("Servers", self)
@@ -93,6 +101,7 @@ class ClientWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
+        self.discovery_panel.serversFound.connect(self._record_discovered)
         self.discovery_panel.status.connect(self.log)
         self.viewer.inputEvent.connect(self._on_input_event)
 
@@ -101,6 +110,7 @@ class ClientWindow(QMainWindow):
         self._client: ShareClient | None = None
         self._connected = False
         self._server_name = ""
+        self._server_key = ""
         self._frame_count = 0
         self.statusBar().showMessage("Not connected")
         self.log("Client started")
@@ -108,14 +118,26 @@ class ClientWindow(QMainWindow):
     def log(self, message: str) -> None:
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
+    def _record_discovered(self, servers: list) -> None:
+        for server in servers:
+            key = f"{server.host}:{server.port}"
+            self.inventory.record(
+                key, "discovered", name=server.name, address=key, detail=key
+            )
+
     def _on_server_activated(self, server: ServerInfo) -> None:
         if self._client is not None:
             self.log("Closing previous connection")
             self._client.close()
             self._client.deleteLater()
         self._server_name = server.name
+        self._server_key = f"{server.host}:{server.port}"
         self._frame_count = 0
         self._connected = False
+        self.inventory.record(
+            self._server_key, "attempt", name=server.name,
+            address=self._server_key, detail=self._server_key,
+        )
         client = ShareClient(
             known_servers=self._known_servers, clipboard=self._clipboard, parent=self
         )
@@ -132,6 +154,7 @@ class ClientWindow(QMainWindow):
     def _on_connected(self, server_name: str) -> None:
         self._server_name = server_name or self._server_name
         self._connected = True
+        self.inventory.record(self._server_key, "connected", name=self._server_name)
         self.viewer.setFocus()
         self.statusBar().showMessage(
             f"Connected to {self._server_name} — waiting for first frame "
@@ -144,11 +167,14 @@ class ClientWindow(QMainWindow):
 
     def _on_denied(self, reason: str) -> None:
         self._connected = False
+        self.inventory.record(self._server_key, "denied", name=self._server_name)
         self.viewer.clear(f"Connection denied: {reason}")
         self.statusBar().showMessage(f"Denied by {self._server_name}: {reason}")
 
     def _on_disconnected(self) -> None:
         self._connected = False
+        if self._server_key:
+            self.inventory.record(self._server_key, "disconnected", name=self._server_name)
         self.viewer.clear("Disconnected")
         self.statusBar().showMessage(f"Disconnected from {self._server_name}")
 

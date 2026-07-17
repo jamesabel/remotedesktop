@@ -48,6 +48,7 @@ class ShareServer(QObject):
 
     clientCountChanged = Signal(int)
     status = Signal(str)
+    peerEvent = Signal(dict)  # {key, event, name, address, detail} for the inventory
 
     def __init__(
         self,
@@ -69,7 +70,9 @@ class ShareServer(QObject):
         if clipboard is not None:
             clipboard.changed.connect(self._broadcast_clipboard)
         self._streams: list[MessageStream] = []
+        self._all_streams: set[MessageStream] = set()
         self._controllers: set[MessageStream] = set()
+        self._stream_key: dict[MessageStream, tuple[str, str, str]] = {}
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -99,13 +102,16 @@ class ShareServer(QObject):
 
     def close(self) -> None:
         self._timer.stop()
-        for stream in self._streams:
-            # Silence disconnected/error so _drop isn't re-entered during teardown.
+        for stream in self._all_streams:
+            # Silence disconnected/error so _drop isn't re-entered during teardown
+            # (covers streams that never completed the hello, too).
             stream.socket.blockSignals(True)
             stream.socket.abort()
         had_clients = bool(self._streams)
         self._streams.clear()
+        self._all_streams.clear()
         self._controllers.clear()
+        self._stream_key.clear()
         if had_clients:
             self.clientCountChanged.emit(0)
         self._server.close()
@@ -119,6 +125,7 @@ class ShareServer(QObject):
                 f"(encrypted={sock.isEncrypted()}) — waiting for hello"
             )
             stream = MessageStream(sock, self)
+            self._all_streams.add(stream)
             sock.disconnected.connect(lambda s=stream: self._drop(s))
             sock.errorOccurred.connect(
                 lambda _error, s=sock: self.status.emit(
@@ -141,15 +148,33 @@ class ShareServer(QObject):
             return
         self._handle_hello(stream, message)
 
+    def _emit_peer(self, stream: MessageStream, event: str) -> None:
+        client_id, client_name, peer = self._stream_key.get(
+            stream, ("", "", _peer(stream.socket))
+        )
+        self.peerEvent.emit(
+            {
+                "key": client_id or peer,
+                "event": event,
+                "name": client_name,
+                "address": peer,
+                "detail": client_id,
+            }
+        )
+
     def _handle_hello(self, stream: MessageStream, message: dict) -> None:
         peer = _peer(stream.socket)
         client_id = message.get("client_id")
         client_name = str(message.get("name", "unknown"))
         self.status.emit(f'Hello from "{client_name}" ({client_id}) at {peer}')
+        if isinstance(client_id, str) and client_id:
+            self._stream_key[stream] = (client_id, client_name, peer)
+            self._emit_peer(stream, "attempt")
         if message.get("version") != PROTOCOL_VERSION:
             self.status.emit(
                 f"Denying {peer}: incompatible protocol version {message.get('version')}"
             )
+            self._emit_peer(stream, "denied")
             stream.send_json({"type": "denied", "reason": "incompatible protocol version"})
             stream.socket.disconnectFromHost()
             return
@@ -162,6 +187,7 @@ class ShareServer(QObject):
         presented = message.get("token")
         if existing and isinstance(presented, str) and hmac.compare_digest(existing, presented):
             self.status.emit(f'"{client_name}" authenticated with its paired token')
+            self._emit_peer(stream, "authenticated")
             self._admit(stream, client_name, {"type": "welcome", "name": socket_module.gethostname()})
             return
 
@@ -173,12 +199,14 @@ class ShareServer(QObject):
             self.status.emit(f'"{client_name}" is new — asking for permission')
         if not self._approve_client(client_id, client_name):
             self.status.emit(f'Permission for "{client_name}" refused — denying')
+            self._emit_peer(stream, "refused")
             stream.send_json({"type": "denied", "reason": "connection refused by user"})
             stream.socket.disconnectFromHost()
             return
         # Reissue the existing token if any (so the client re-stores it); else pair anew.
         token = existing or self._paired.pair(client_id)
         self.status.emit(f'Permission granted — "{client_name}" paired')
+        self._emit_peer(stream, "paired")
         self._admit(
             stream,
             client_name,
@@ -236,6 +264,10 @@ class ShareServer(QObject):
 
     def _drop(self, stream: MessageStream) -> None:
         self._controllers.discard(stream)
+        self._all_streams.discard(stream)
+        if stream in self._stream_key:
+            self._emit_peer(stream, "disconnected")
+            del self._stream_key[stream]
         if stream not in self._streams:
             self.status.emit("Connection closed before completing hello")
             return

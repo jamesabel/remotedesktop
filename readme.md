@@ -28,6 +28,11 @@ using a stored token. The security model is tuned for a trusted LAN: the
 server's certificate is self-signed and trusted on first use, favoring
 reliable reconnection over strict certificate checking.
 
+Both apps have a second tab listing every peer seen on the LAN this session
+— on the server, the clients that have connected or attempted to; on the
+client, the servers it has discovered or tried to reach — with each peer's
+current state, number of attempts, and when it was first and last seen.
+
 ## Requirements
 
 - Windows

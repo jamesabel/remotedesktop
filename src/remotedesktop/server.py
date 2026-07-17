@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +26,7 @@ from remotedesktop.discovery import (
     DISCOVERY_PORT,
     DiscoveryResponder,
 )
+from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareServer
 
 
@@ -45,11 +47,16 @@ class ServerWindow(QMainWindow):
         self.connection_log = QPlainTextEdit()
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.addWidget(self._summary)
-        layout.addWidget(self.connection_log, stretch=1)
-        self.setCentralWidget(central)
+        status_tab = QWidget()
+        status_layout = QVBoxLayout(status_tab)
+        status_layout.addWidget(self._summary)
+        status_layout.addWidget(self.connection_log, stretch=1)
+
+        self.inventory = ConnectionInventory(self)
+        tabs = QTabWidget()
+        tabs.addTab(status_tab, "Status")
+        tabs.addTab(InventoryTab(self.inventory), "Clients on LAN")
+        self.setCentralWidget(tabs)
 
         if credentials is None:
             config_dir = default_config_dir()
@@ -66,6 +73,7 @@ class ServerWindow(QMainWindow):
         )
         self.share_server.status.connect(self.log)
         self.share_server.clientCountChanged.connect(self._update_summary)
+        self.share_server.peerEvent.connect(self._record_peer)
         self._listening = self.share_server.listen(connect_port)
 
         self.responder: DiscoveryResponder | None = None
@@ -92,6 +100,15 @@ class ServerWindow(QMainWindow):
 
     def log(self, message: str) -> None:
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
+
+    def _record_peer(self, event: dict) -> None:
+        self.inventory.record(
+            event["key"],
+            event["event"],
+            name=event.get("name", ""),
+            address=event.get("address", ""),
+            detail=event.get("detail", ""),
+        )
 
     def _update_summary(self, client_count: int) -> None:
         if not self._listening:
