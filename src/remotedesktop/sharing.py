@@ -532,6 +532,8 @@ class ShareClient(QObject):
     ) -> None:
         super().__init__(parent)
         self._performance = performance
+        if performance is not None:
+            performance.connectionLost.connect(self._on_connection_lost)
         self._client_id, self._name = identity or load_client_identity(
             db.connect(default_db_path())
         )
@@ -619,6 +621,22 @@ class ShareClient(QObject):
         if self._server_token:
             hello["token"] = self._server_token
         self._stream.send_json(hello)
+
+    def _on_connection_lost(self, stream) -> None:
+        # The window shares one monitor across successive ShareClient
+        # instances, so only the owner of the silent stream may react. (The
+        # None check is for the type checker: the signal is only connected
+        # when a monitor exists.)
+        if stream is not self._stream or self._performance is None:
+            return
+        self.status.emit(
+            "Connection lost: no data from the server for "
+            f"{self._performance.dead_after_seconds:.0f} s — disconnecting"
+        )
+        # A half-open socket never emits disconnected on its own; abort() is
+        # silent too, so run the disconnect path explicitly.
+        self._socket.abort()
+        self._on_disconnected()
 
     def _on_disconnected(self) -> None:
         if self._performance is not None:
