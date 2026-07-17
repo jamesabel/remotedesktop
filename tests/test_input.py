@@ -207,6 +207,25 @@ def test_viewer_forwards_wheel_and_key_release(qapp):
     assert events[-1]["pressed"] is False
 
 
+def test_tab_key_is_forwarded_not_used_for_focus_traversal(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    events: list[dict] = []
+    viewer.inputEvent.connect(events.append)
+    # Send Tab through the real event path: QWidget.event() offers it to
+    # focusNextPrevChild before keyPressEvent, which is what ate Tab.
+    tab = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier, 0, 0x09, 0)
+    qapp.sendEvent(viewer, tab)
+    assert events == [{"action": "key", "vk": 0x09, "pressed": True}]
+    # Shift+Tab arrives as Backtab and must be forwarded the same way.
+    backtab = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier, 0, 0x09, 0
+    )
+    qapp.sendEvent(viewer, backtab)
+    assert events[-1] == {"action": "key", "vk": 0x09, "pressed": True}
+
+
 def test_release_when_frame_vanished_mid_drag(qapp):
     viewer = ViewerWidget()
     viewer.resize(400, 400)
