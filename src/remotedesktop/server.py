@@ -1,6 +1,7 @@
 """Server GUI application: shares this computer's desktop with permitted
 clients and prompts the user to approve first-time connections."""
 
+import logging
 import socket
 import sqlite3
 import sys
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, tls, window_state
+from remotedesktop import db, logs, tls, window_state
 from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
@@ -31,6 +32,8 @@ from remotedesktop.discovery import (
 )
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareServer
+
+_log = logging.getLogger("remotedesktop.server")
 
 
 class ServerWindow(QMainWindow):
@@ -119,6 +122,9 @@ class ServerWindow(QMainWindow):
         window_state.restore_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
 
     def log(self, message: str) -> None:
+        # Everything shown in the Connection log pane also goes to the debug
+        # log file (when main() enabled it), so it survives the window.
+        _log.info(message)
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
     def _record_peer(self, event: dict) -> None:
@@ -188,8 +194,10 @@ class ServerWindow(QMainWindow):
 
 
 def main() -> None:  # pragma: no cover - runs the Qt event loop
+    log_path = logs.init_logging("server")
     app = QApplication(sys.argv)
     window = ServerWindow()
+    window.log(f"Detailed log: {log_path}")
     window.show()
     raise SystemExit(app.exec())
 

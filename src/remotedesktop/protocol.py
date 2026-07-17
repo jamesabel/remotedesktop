@@ -6,12 +6,15 @@ input aborts the connection.
 """
 
 import json
+import logging
 import struct
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtNetwork import QTcpSocket
 
 PROTOCOL_VERSION = 1
+
+_log = logging.getLogger("remotedesktop.protocol")
 
 _HEADER = struct.Struct(">IB")
 _KIND_JSON = 0
@@ -56,6 +59,15 @@ class MessageStream(QObject):
                 return
             length, kind = _HEADER.unpack(self.socket.peek(_HEADER.size).data())
             if length > self.max_payload:
+                _log.warning(
+                    "Aborting %s:%s: payload of %d bytes (kind=%d) exceeds the "
+                    "%d-byte cap",
+                    self.socket.peerAddress().toString(),
+                    self.socket.peerPort(),
+                    length,
+                    kind,
+                    self.max_payload,
+                )
                 self.socket.abort()
                 return
             if self.socket.bytesAvailable() < _HEADER.size + length:
@@ -65,7 +77,15 @@ class MessageStream(QObject):
             if kind == _KIND_JSON:
                 try:
                     message = json.loads(bytes(payload).decode())
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    _log.warning(
+                        "Aborting %s:%s: undecodable JSON control message "
+                        "(%d bytes): %s",
+                        self.socket.peerAddress().toString(),
+                        self.socket.peerPort(),
+                        length,
+                        error,
+                    )
                     self.socket.abort()
                     return
                 if isinstance(message, dict):

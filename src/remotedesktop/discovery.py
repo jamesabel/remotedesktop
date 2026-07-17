@@ -6,11 +6,14 @@ whose magic, protocol version, or type don't match are ignored.
 """
 
 import json
+import logging
 import socket
 import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+_log = logging.getLogger("remotedesktop.discovery")
 
 DISCOVERY_PORT = 48653
 DEFAULT_CONNECT_PORT = 48654
@@ -101,11 +104,13 @@ class DiscoveryResponder:
             except OSError:
                 return
             if _parse(data, "probe") is None:
+                _log.debug("Ignoring non-probe datagram (%d bytes) from %s", len(data), sender)
                 continue
+            _log.debug("Probe from %s — sending reply", sender)
             try:
                 self._socket.sendto(self._reply, sender)
-            except OSError:
-                pass
+            except OSError as error:
+                _log.warning("Could not reply to probe from %s: %s", sender, error)
 
 
 def discover_servers(
@@ -126,8 +131,10 @@ def discover_servers(
         for host in broadcast_hosts:
             try:
                 sock.sendto(probe, (host, discovery_port))
-            except OSError:
-                pass
+            except OSError as error:
+                # A failed broadcast means the scan quietly finds nothing —
+                # worth a record when diagnosing "no servers found".
+                _log.warning("Probe broadcast to %s:%d failed: %s", host, discovery_port, error)
         deadline = time.monotonic() + timeout
         while (remaining := deadline - time.monotonic()) > 0:
             sock.settimeout(remaining)
@@ -137,10 +144,13 @@ def discover_servers(
                 break
             message = _parse(data, "reply")
             if message is None:
+                _log.debug("Ignoring non-reply datagram (%d bytes) from %s", len(data), host)
                 continue
             name = message.get("name")
             port = message.get("port")
             if not isinstance(name, str) or not isinstance(port, int):
+                _log.debug("Ignoring malformed reply from %s: %r", host, message)
                 continue
             found.setdefault((host, port), ServerInfo(name=name, host=host, port=port))
+    _log.debug("Discovery scan finished: %d server(s) found", len(found))
     return list(found.values())
