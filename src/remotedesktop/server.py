@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, logs, tls, window_state
+from remotedesktop import db, icon, logs, tls, window_state
 from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
@@ -52,6 +52,7 @@ class ServerWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Server")
+        self.setWindowIcon(icon.app_icon("server"))
         self._name = socket.gethostname()
 
         self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
@@ -246,7 +247,9 @@ class ServerWindow(QMainWindow):
 
 def main() -> None:  # pragma: no cover - runs the Qt event loop
     log_path = logs.init_logging("server")
+    icon.set_windows_app_id("remotedesktop.server")
     app = QApplication(sys.argv)
+    app.setWindowIcon(icon.app_icon("server"))
     window = ServerWindow()
     window.log(f"Detailed log: {log_path}")
     window.show()

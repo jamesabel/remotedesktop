@@ -34,6 +34,7 @@ def test_window_starts_disconnected(qapp, tmp_path):
     labels = [tabs.tabText(i) for i in range(tabs.count())]
     assert "Performance" in labels and "Preferences" in labels
     assert not window.performance._timer.isActive()  # idle: no periodic work
+    assert not window.windowIcon().isNull()
     window.close()
 
 
