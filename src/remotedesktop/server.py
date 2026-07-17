@@ -64,7 +64,7 @@ class ServerWindow(QMainWindow):
         status_layout = QVBoxLayout(status_tab)
         status_layout.addWidget(self._summary)
         status_layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
-        status_layout.addWidget(self.connection_log, stretch=1)
+        status_layout.addStretch(1)
 
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
@@ -75,6 +75,7 @@ class ServerWindow(QMainWindow):
             InventoryTab(self.inventory, "Revoke access", self._revoke_client),
             "Clients on LAN",
         )
+        tabs.addTab(self.connection_log, "Connection log")
         self.setCentralWidget(tabs)
 
         if credentials is None:
