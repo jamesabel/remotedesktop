@@ -2,7 +2,7 @@ import socket
 
 import remotedesktop
 from remotedesktop.client import ClientWindow, DiscoveryPanel
-from remotedesktop.config import ApprovedClients
+from remotedesktop.config import PairedClients
 from remotedesktop.discovery import ServerInfo, discover_servers
 from remotedesktop.server import ServerWindow
 from remotedesktop.viewer import ViewerWidget
@@ -28,12 +28,13 @@ def test_discovery_panel_lists_servers(qapp) -> None:
     assert "testbox" in panel.server_list.item(0).text()
 
 
-def test_server_window_is_discoverable(qapp, tmp_path) -> None:
+def test_server_window_is_discoverable(qapp, credentials, tmp_path) -> None:
     port = free_udp_port()
     window = ServerWindow(
         discovery_port=port,
         connect_port=0,
-        approved=ApprovedClients(tmp_path / "approved.json"),
+        paired=PairedClients(tmp_path / "paired.json"),
+        credentials=credentials,
     )
     try:
         servers = discover_servers(

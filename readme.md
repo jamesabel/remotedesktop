@@ -22,8 +22,11 @@ mouse/keyboard control, and two-way clipboard sync. A running server appears
 in the client's *Servers* panel; opening it (after the server user approves
 the first connection) shows the remote screen, clicking into the view
 forwards mouse and keyboard input, and text/images copied on either side
-appear on the other. The connection is currently unencrypted, so use it only
-on a trusted LAN.
+appear on the other. The connection is encrypted with TLS, and after the
+server user approves a client once, that client reconnects automatically
+using a stored token. The security model is tuned for a trusted LAN: the
+server's certificate is self-signed and trusted on first use, favoring
+reliable reconnection over strict certificate checking.
 
 ## Requirements
 

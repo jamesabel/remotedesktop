@@ -17,8 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from remotedesktop import tls
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import ApprovedClients
+from remotedesktop.config import PairedClients, default_config_dir
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
     DISCOVERY_PORT,
@@ -33,7 +34,8 @@ class ServerWindow(QMainWindow):
         *,
         discovery_port: int = DISCOVERY_PORT,
         connect_port: int = DEFAULT_CONNECT_PORT,
-        approved: ApprovedClients | None = None,
+        paired: PairedClients | None = None,
+        credentials=None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Server")
@@ -49,9 +51,18 @@ class ServerWindow(QMainWindow):
         layout.addWidget(self.connection_log, stretch=1)
         self.setCentralWidget(central)
 
+        if credentials is None:
+            config_dir = default_config_dir()
+            credentials = tls.load_or_create_credentials(
+                config_dir / "server_cert.pem", config_dir / "server_key.pem"
+            )
         self._clipboard = ClipboardSync(parent=self)
         self.share_server = ShareServer(
-            self._ask_approval, approved=approved, clipboard=self._clipboard, parent=self
+            self._ask_approval,
+            credentials=credentials,
+            paired=paired,
+            clipboard=self._clipboard,
+            parent=self,
         )
         self.share_server.status.connect(self.log)
         self.share_server.clientCountChanged.connect(self._update_summary)

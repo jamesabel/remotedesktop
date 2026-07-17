@@ -1,11 +1,8 @@
-import pytest
 from PySide6.QtCore import QObject, Signal
 
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import ApprovedClients
-from remotedesktop.sharing import ShareClient, ShareServer
 
-from test_sharing import IDENTITY, pump
+from test_sharing import make_client, make_server, pump
 
 
 class FakeClipboard(QObject):
@@ -25,19 +22,9 @@ class FakeClipboard(QObject):
         self.changed.emit(payload)
 
 
-@pytest.fixture
-def approved(tmp_path):
-    approved = ApprovedClients(tmp_path / "approved.json")
-    approved.add(IDENTITY[0])
-    return approved
-
-
-def connected_pair(qapp, approved, server_clipboard, client_clipboard):
-    server = ShareServer(
-        approve_client=lambda *_: False, approved=approved, clipboard=server_clipboard
-    )
-    assert server.listen(0)
-    client = ShareClient(identity=IDENTITY, clipboard=client_clipboard)
+def connected_pair(qapp, credentials, tmp_path, server_cb, client_cb):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True, clipboard=server_cb)
+    client = make_client(tmp_path, clipboard=client_cb)
     connected = []
     client.connected.connect(connected.append)
     client.connect_to("127.0.0.1", server.port)
@@ -45,9 +32,9 @@ def connected_pair(qapp, approved, server_clipboard, client_clipboard):
     return server, client
 
 
-def test_client_copy_reaches_server(qapp, approved):
+def test_client_copy_reaches_server(qapp, credentials, tmp_path):
     server_cb, client_cb = FakeClipboard(), FakeClipboard()
-    server, client = connected_pair(qapp, approved, server_cb, client_cb)
+    server, client = connected_pair(qapp, credentials, tmp_path, server_cb, client_cb)
     try:
         client_cb.local_copy({"text": "hello from client"})
         pump(qapp, lambda: server_cb.applied)
@@ -57,9 +44,9 @@ def test_client_copy_reaches_server(qapp, approved):
         server.close()
 
 
-def test_server_copy_reaches_client(qapp, approved):
+def test_server_copy_reaches_client(qapp, credentials, tmp_path):
     server_cb, client_cb = FakeClipboard(), FakeClipboard()
-    server, client = connected_pair(qapp, approved, server_cb, client_cb)
+    server, client = connected_pair(qapp, credentials, tmp_path, server_cb, client_cb)
     try:
         server_cb.local_copy({"text": "hello from server"})
         pump(qapp, lambda: client_cb.applied)
@@ -69,15 +56,10 @@ def test_server_copy_reaches_client(qapp, approved):
         server.close()
 
 
-def test_clipboard_from_unapproved_stream_is_ignored(qapp, tmp_path):
+def test_clipboard_from_unapproved_stream_is_ignored(qapp, credentials, tmp_path):
     server_cb = FakeClipboard()
-    server = ShareServer(
-        approve_client=lambda *_: False,
-        approved=ApprovedClients(tmp_path / "approved.json"),
-        clipboard=server_cb,
-    )
-    assert server.listen(0)
-    client = ShareClient(identity=IDENTITY, clipboard=FakeClipboard())
+    server = make_server(credentials, tmp_path, approve=lambda *_: False, clipboard=server_cb)
+    client = make_client(tmp_path, clipboard=FakeClipboard())
     denied = []
     client.denied.connect(denied.append)
     client.connect_to("127.0.0.1", server.port)

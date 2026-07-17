@@ -1,14 +1,11 @@
-import time
-
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QImage, QMouseEvent
+from PySide6.QtGui import QKeyEvent  # noqa: F401  (used in future input tests)
 
-from remotedesktop.config import ApprovedClients
-from remotedesktop.sharing import ShareClient, ShareServer
 from remotedesktop.viewer import ViewerWidget
 
-from test_sharing import IDENTITY, pump
+from test_sharing import make_client, make_server, pump
 
 
 class RecordingInjector:
@@ -33,20 +30,10 @@ class RecordingInjector:
         self.calls.append(("key", vk, pressed))
 
 
-@pytest.fixture
-def approved(tmp_path):
-    approved = ApprovedClients(tmp_path / "approved.json")
-    approved.add(IDENTITY[0])
-    return approved
-
-
-def test_input_is_injected_on_server(qapp, approved):
+def test_input_is_injected_on_server(qapp, credentials, tmp_path):
     injector = RecordingInjector()
-    server = ShareServer(
-        approve_client=lambda *_: False, approved=approved, injector=injector
-    )
-    assert server.listen(0)
-    client = ShareClient(identity=IDENTITY)
+    server = make_server(credentials, tmp_path, approve=lambda *_: True, injector=injector)
+    client = make_client(tmp_path)
     connected = []
     client.connected.connect(connected.append)
     client.connect_to("127.0.0.1", server.port)
@@ -66,15 +53,10 @@ def test_input_is_injected_on_server(qapp, approved):
         server.close()
 
 
-def test_input_from_unapproved_stream_is_ignored(qapp, tmp_path):
+def test_input_from_unapproved_stream_is_ignored(qapp, credentials, tmp_path):
     injector = RecordingInjector()
-    server = ShareServer(
-        approve_client=lambda *_: False,
-        approved=ApprovedClients(tmp_path / "approved.json"),
-        injector=injector,
-    )
-    assert server.listen(0)
-    client = ShareClient(identity=IDENTITY)
+    server = make_server(credentials, tmp_path, approve=lambda *_: False, injector=injector)
+    client = make_client(tmp_path)
     denied = []
     client.denied.connect(denied.append)
     client.connect_to("127.0.0.1", server.port)

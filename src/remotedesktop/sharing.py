@@ -1,25 +1,37 @@
-"""Screen sharing over TCP.
+"""Screen sharing over TLS.
 
-ShareServer (server side) accepts clients, enforces first-connection
-approval, and streams JPEG frames of the primary screen to all connected
-clients from a single capture timer. ShareClient (client side) connects,
-identifies itself, and emits decoded frames.
+The transport is TLS (the server has a persisted self-signed certificate; the
+client trusts it on first use and pins its fingerprint). On top of that, a
+simple token handshake authenticates the client: the first time a client
+connects, the server-side user approves it and the server issues a shared
+token, which the client stores and presents on later connections to reconnect
+without another prompt. A lost or mismatched token just falls back to asking
+the user again — nothing hard-fails — which keeps reconnection robust on a
+trusted LAN.
 
-Both classes emit human-readable `status` messages for every phase of the
-connection so the GUIs can show a debug log.
+Both classes emit human-readable `status` messages for every phase so the
+GUIs can show a debug log.
 """
 
+import hmac
 import socket as socket_module
 from collections.abc import Callable
 
 from PySide6.QtCore import QBuffer, QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QImage
-from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
+from PySide6.QtNetwork import (
+    QHostAddress,
+    QSslCertificate,
+    QSslKey,
+    QSslServer,
+    QSslSocket,
+)
 
-from remotedesktop.config import ApprovedClients, load_client_identity
+from remotedesktop.config import KnownServers, PairedClients, load_client_identity
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop.input_injection import InputInjector
 from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
+from remotedesktop import tls
 
 DEFAULT_FPS = 10
 JPEG_QUALITY = 70
@@ -27,12 +39,12 @@ JPEG_QUALITY = 70
 _MAX_SEND_BACKLOG = 8 * 1024 * 1024
 
 
-def _peer(sock: QTcpSocket) -> str:
+def _peer(sock: QSslSocket) -> str:
     return f"{sock.peerAddress().toString()}:{sock.peerPort()}"
 
 
 class ShareServer(QObject):
-    """Listens for clients, enforces first-connection approval, streams the screen."""
+    """Listens over TLS, authenticates clients by token, streams the screen."""
 
     clientCountChanged = Signal(int)
     status = Signal(str)
@@ -41,7 +53,8 @@ class ShareServer(QObject):
         self,
         approve_client: Callable[[str, str], bool],
         *,
-        approved: ApprovedClients | None = None,
+        credentials: tuple[QSslCertificate, QSslKey] | None = None,
+        paired: PairedClients | None = None,
         fps: int = DEFAULT_FPS,
         injector: InputInjector | None = None,
         clipboard=None,
@@ -49,7 +62,7 @@ class ShareServer(QObject):
     ) -> None:
         super().__init__(parent)
         self._approve_client = approve_client
-        self._approved = approved if approved is not None else ApprovedClients()
+        self._paired = paired if paired is not None else PairedClients()
         self._fps = fps
         self._injector = injector if injector is not None else InputInjector()
         self._clipboard = clipboard
@@ -57,8 +70,16 @@ class ShareServer(QObject):
             clipboard.changed.connect(self._broadcast_clipboard)
         self._streams: list[MessageStream] = []
         self._controllers: set[MessageStream] = set()
-        self._server = QTcpServer(self)
-        self._server.newConnection.connect(self._on_new_connection)
+
+        cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
+        self._server = QSslServer(self)
+        self._server.setSslConfiguration(tls.server_configuration(cert, key))
+        self._server.pendingConnectionAvailable.connect(self._on_new_connection)
+        self._server.errorOccurred.connect(
+            lambda sock, _err: self.status.emit(
+                f"TLS handshake error ({_peer(sock)}): {sock.errorString()}"
+            )
+        )
         self._timer = QTimer(self)
         self._timer.setInterval(round(1000 / fps))
         self._timer.timeout.connect(self._broadcast_frame)
@@ -69,7 +90,7 @@ class ShareServer(QObject):
                 f"Cannot listen on TCP port {port}: {self._server.errorString()}"
             )
             return False
-        self.status.emit(f"Listening for connections on TCP port {self.port}")
+        self.status.emit(f"Listening for TLS connections on TCP port {self.port}")
         return True
 
     @property
@@ -93,7 +114,10 @@ class ShareServer(QObject):
     def _on_new_connection(self) -> None:
         while self._server.hasPendingConnections():
             sock = self._server.nextPendingConnection()
-            self.status.emit(f"Incoming connection from {_peer(sock)} — waiting for hello")
+            self.status.emit(
+                f"Incoming TLS connection from {_peer(sock)} "
+                f"(encrypted={sock.isEncrypted()}) — waiting for hello"
+            )
             stream = MessageStream(sock, self)
             sock.disconnected.connect(lambda s=stream: self._drop(s))
             sock.errorOccurred.connect(
@@ -115,6 +139,9 @@ class ShareServer(QObject):
             return
         if message.get("type") != "hello" or stream in self._streams:
             return
+        self._handle_hello(stream, message)
+
+    def _handle_hello(self, stream: MessageStream, message: dict) -> None:
         peer = _peer(stream.socket)
         client_id = message.get("client_id")
         client_name = str(message.get("name", "unknown"))
@@ -130,18 +157,36 @@ class ShareServer(QObject):
             self.status.emit(f"Denying {peer}: missing client id")
             stream.socket.abort()
             return
-        if client_id in self._approved:
-            self.status.emit(f'"{client_name}" is already approved')
+
+        existing = self._paired.token_for(client_id)
+        presented = message.get("token")
+        if existing and isinstance(presented, str) and hmac.compare_digest(existing, presented):
+            self.status.emit(f'"{client_name}" authenticated with its paired token')
+            self._admit(stream, client_name, {"type": "welcome", "name": socket_module.gethostname()})
+            return
+
+        if existing:
+            self.status.emit(
+                f'"{client_name}" is known but sent no valid token — asking for permission again'
+            )
         else:
-            self.status.emit(f'"{client_name}" is not yet approved — asking for permission')
-            if not self._approve_client(client_id, client_name):
-                self.status.emit(f'Permission for "{client_name}" refused — denying')
-                stream.send_json({"type": "denied", "reason": "connection refused by user"})
-                stream.socket.disconnectFromHost()
-                return
-            self._approved.add(client_id)
-            self.status.emit(f'Permission granted — "{client_name}" added to approved clients')
-        stream.send_json({"type": "welcome", "name": socket_module.gethostname()})
+            self.status.emit(f'"{client_name}" is new — asking for permission')
+        if not self._approve_client(client_id, client_name):
+            self.status.emit(f'Permission for "{client_name}" refused — denying')
+            stream.send_json({"type": "denied", "reason": "connection refused by user"})
+            stream.socket.disconnectFromHost()
+            return
+        # Reissue the existing token if any (so the client re-stores it); else pair anew.
+        token = existing or self._paired.pair(client_id)
+        self.status.emit(f'Permission granted — "{client_name}" paired')
+        self._admit(
+            stream,
+            client_name,
+            {"type": "welcome", "name": socket_module.gethostname(), "token": token},
+        )
+
+    def _admit(self, stream: MessageStream, client_name: str, welcome: dict) -> None:
+        stream.send_json(welcome)
         self._streams.append(stream)
         self.clientCountChanged.emit(len(self._streams))
         self.status.emit(
@@ -222,7 +267,7 @@ class ShareServer(QObject):
 
 
 class ShareClient(QObject):
-    """Connects to a ShareServer, identifies itself, and emits decoded frames."""
+    """Connects to a ShareServer over TLS, authenticates, and emits frames."""
 
     connected = Signal(str)  # server name
     denied = Signal(str)  # reason
@@ -234,18 +279,25 @@ class ShareClient(QObject):
         self,
         identity: tuple[str, str] | None = None,
         *,
+        known_servers: KnownServers | None = None,
         clipboard=None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._client_id, self._name = identity or load_client_identity()
+        self._known = known_servers
         self._got_first_frame = False
         self._clipboard = clipboard
         if clipboard is not None:
             clipboard.changed.connect(self._send_clipboard)
-        self._socket = QTcpSocket(self)
+        self._server_key = ""
+        self._server_fingerprint = ""
+        self._server_token: str | None = None
+        self._socket = QSslSocket(self)
+        self._socket.setSslConfiguration(tls.client_configuration())
         self._stream = MessageStream(self._socket, self)
-        self._socket.connected.connect(self._send_hello)
+        self._socket.encrypted.connect(self._on_encrypted)
+        self._socket.sslErrors.connect(self._on_ssl_errors)
         self._socket.disconnected.connect(self._on_disconnected)
         self._socket.errorOccurred.connect(
             lambda _error: self.status.emit(f"Socket error: {self._socket.errorString()}")
@@ -255,33 +307,52 @@ class ShareClient(QObject):
 
     def connect_to(self, host: str, port: int) -> None:
         self._got_first_frame = False
-        self.status.emit(f"Connecting to {host}:{port} …")
-        self._socket.connectToHost(host, port)
+        self._server_key = f"{host}:{port}"
+        record = self._known.get(self._server_key) if self._known else None
+        self._server_token = record.get("token") if record else None
+        self.status.emit(f"Connecting to {host}:{port} over TLS …")
+        self._socket.connectToHostEncrypted(host, port)
 
     def close(self) -> None:
         self._socket.abort()
 
     def send_input(self, event: dict) -> None:
-        if self._socket.state() == QTcpSocket.SocketState.ConnectedState:
+        if self._socket.state() == QSslSocket.SocketState.ConnectedState:
             self._stream.send_json({"type": "input", **event})
 
     def _send_clipboard(self, payload: dict) -> None:
-        if self._socket.state() == QTcpSocket.SocketState.ConnectedState:
+        if self._socket.state() == QSslSocket.SocketState.ConnectedState:
             self.status.emit("Sending local clipboard to server")
             self._stream.send_json({"type": "clipboard", **payload})
 
-    def _send_hello(self) -> None:
+    def _on_ssl_errors(self, errors) -> None:
+        # Self-signed server certificate is expected; identity is pinned instead.
         self.status.emit(
-            f'TCP connected — sending hello as "{self._name}" (client id {self._client_id})'
+            "Ignoring expected TLS certificate warnings: "
+            + "; ".join(e.errorString() for e in errors)
         )
-        self._stream.send_json(
-            {
-                "type": "hello",
-                "version": PROTOCOL_VERSION,
-                "client_id": self._client_id,
-                "name": self._name,
-            }
-        )
+        self._socket.ignoreSslErrors()
+
+    def _on_encrypted(self) -> None:
+        cert = self._socket.peerCertificate()
+        fingerprint = "" if cert.isNull() else tls.certificate_fingerprint(cert)
+        self._server_fingerprint = fingerprint
+        record = self._known.get(self._server_key) if self._known else None
+        if record and record.get("fingerprint") and record["fingerprint"] != fingerprint:
+            self.status.emit(
+                "WARNING: server certificate fingerprint changed since last pairing "
+                "(continuing anyway; re-pairing)"
+            )
+        self.status.emit(f"TLS established (server cert {fingerprint[:16]}…) — sending hello")
+        hello = {
+            "type": "hello",
+            "version": PROTOCOL_VERSION,
+            "client_id": self._client_id,
+            "name": self._name,
+        }
+        if self._server_token:
+            hello["token"] = self._server_token
+        self._stream.send_json(hello)
 
     def _on_disconnected(self) -> None:
         self.status.emit("Disconnected from server")
@@ -291,6 +362,10 @@ class ShareClient(QObject):
         match message.get("type"):
             case "welcome":
                 name = str(message.get("name", ""))
+                token = message.get("token")
+                if isinstance(token, str) and self._known is not None:
+                    self._known.remember(self._server_key, self._server_fingerprint, token)
+                    self.status.emit("Paired with server — token stored for future connections")
                 self.status.emit(
                     f'Server "{name}" accepted the connection — waiting for first frame'
                 )

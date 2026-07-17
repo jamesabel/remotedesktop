@@ -15,6 +15,7 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dependencies = [
+    "cryptography>=49.0.0",
     "pyside6>=6.11.1",
 ]
 
