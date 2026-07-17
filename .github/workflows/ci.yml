@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff check .
+
+  ty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # ty resolves imports from the project venv; pyproject pins the
+      # type-checking platform to win32 (the app's target).
+      - run: uv sync
+      - run: uvx ty check .
+
+  test:
+    # The app targets Windows: input injection, schannel TLS, and the GUI
+    # tests all assume it.
+    runs-on: windows-latest
+    permissions:
+      contents: write # to push the updated coverage badge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run pytest --cov=remotedesktop --cov-report=term
+      - name: Update coverage badge
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: |
+          uv run python scripts/make_coverage_badge.py
+          git add badges/coverage.svg
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Update coverage badge [skip ci]"
+            git push
+          }
+          exit 0

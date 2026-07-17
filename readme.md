@@ -1,5 +1,11 @@
 # Remote Desktop
 
+[![CI](https://github.com/jamesabel/remotedesktop/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesabel/remotedesktop/actions/workflows/ci.yml)
+![Coverage](badges/coverage.svg)
+[![PyPI](https://img.shields.io/pypi/v/remotedesktop)](https://pypi.org/project/remotedesktop/)
+![Python](https://img.shields.io/badge/python-3.14%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 A Python client/server application that provides remote desktop for Windows
 computers on the same LAN, with autodiscovery of servers.
 

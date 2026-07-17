@@ -20,7 +20,7 @@ from PySide6.QtCore import QBuffer, QMimeData, QObject, Signal
 from PySide6.QtGui import QClipboard, QGuiApplication, QImage
 
 
-def _image_hash(image: QImage) -> str | None:
+def _image_hash(image: QImage | None) -> str | None:
     if image is None or image.isNull():
         return None
     canonical = image.convertToFormat(QImage.Format.Format_RGBA8888)
@@ -57,8 +57,10 @@ class ClipboardSync(QObject):
         if image_hash is not None:
             buffer = QBuffer()
             buffer.open(QBuffer.OpenModeFlag.WriteOnly)
-            image.save(buffer, "PNG")
-            payload["image_png"] = base64.b64encode(bytes(buffer.data())).decode()
+            image.save(buffer, "PNG")  # ty: ignore[no-matching-overload]
+            payload["image_png"] = base64.b64encode(
+                bytes(buffer.data())  # ty: ignore[invalid-argument-type]
+            ).decode()
         self.changed.emit(payload)
 
     def apply(self, payload: dict) -> None:
@@ -68,7 +70,7 @@ class ClipboardSync(QObject):
         encoded = payload.get("image_png")
         if isinstance(encoded, str):
             try:
-                image = QImage.fromData(base64.b64decode(encoded), "PNG")
+                image = QImage.fromData(base64.b64decode(encoded), "PNG")  # ty: ignore[invalid-argument-type]
             except (ValueError, TypeError):
                 image = None
         if image is not None and image.isNull():

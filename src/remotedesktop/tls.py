@@ -68,7 +68,7 @@ def ephemeral_credentials() -> tuple[QSslCertificate, QSslKey]:
 def certificate_fingerprint(cert: QSslCertificate) -> str:
     """Stable SHA-256 fingerprint of a certificate, as lowercase hex."""
     digest = QCryptographicHash.hash(cert.toDer(), QCryptographicHash.Algorithm.Sha256)
-    return bytes(digest).hex()
+    return bytes(digest).hex()  # ty: ignore[invalid-argument-type]
 
 
 def server_configuration(cert: QSslCertificate, key: QSslKey) -> QSslConfiguration:

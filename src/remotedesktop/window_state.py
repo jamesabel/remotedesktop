@@ -23,4 +23,4 @@ def restore_geometry(window: QWidget, settings: Settings, key: str) -> None:
 
 def save_geometry(window: QWidget, settings: Settings, key: str) -> None:
     """Store the window's current geometry under `key`."""
-    settings.set(key, bytes(window.saveGeometry().toHex()).decode())
+    settings.set(key, bytes(window.saveGeometry().toHex()).decode())  # ty: ignore[invalid-argument-type]

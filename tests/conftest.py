@@ -6,7 +6,8 @@ from remotedesktop import tls
 
 @pytest.fixture(scope="session")
 def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance()
+    return app if isinstance(app, QApplication) else QApplication([])
 
 
 @pytest.fixture(scope="session")

@@ -27,6 +27,7 @@ remotedesktop-server = "remotedesktop.server:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]
@@ -38,3 +39,8 @@ path = "src/remotedesktop/__init__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ty.environment]
+# The app targets Windows (SendInput via ctypes.windll); type-check as such
+# even when ty runs on a Linux CI runner.
+python-platform = "win32"

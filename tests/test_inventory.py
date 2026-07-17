@@ -52,7 +52,8 @@ def test_inventory_tab_shows_rows(qapp):
     assert tab._table.rowCount() == 0
     inv.record("a", "attempt", name="A", address="host:1")
     assert tab._table.rowCount() == 1
-    assert tab._table.item(0, 0).text() == "A"
+    item = tab._table.item(0, 0)
+    assert item is not None and item.text() == "A"
 
 
 def test_inventory_tab_action_button_passes_selected_key(qapp):
@@ -60,11 +61,13 @@ def test_inventory_tab_action_button_passes_selected_key(qapp):
     inv.record("client-42", "connected", name="Bob")
     acted = []
     tab = InventoryTab(inv, "Revoke", acted.append)
+    button = tab._action_button
+    assert button is not None
     # No selection yet -> button disabled and does nothing useful.
-    assert not tab._action_button.isEnabled()
+    assert not button.isEnabled()
     tab._table.selectRow(0)
-    assert tab._action_button.isEnabled()
-    tab._action_button.click()
+    assert button.isEnabled()
+    button.click()
     assert acted == ["client-42"]
 
 

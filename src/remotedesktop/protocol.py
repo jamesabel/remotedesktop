@@ -64,7 +64,7 @@ class MessageStream(QObject):
             payload = self.socket.read(length).data()
             if kind == _KIND_JSON:
                 try:
-                    message = json.loads(payload.decode())
+                    message = json.loads(bytes(payload).decode())
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self.socket.abort()
                     return

@@ -16,6 +16,7 @@ GUIs can show a debug log.
 import hmac
 import socket as socket_module
 from collections.abc import Callable
+from typing import cast
 
 from PySide6.QtCore import QBuffer, QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QImage
@@ -25,6 +26,7 @@ from PySide6.QtNetwork import (
     QSslKey,
     QSslServer,
     QSslSocket,
+    QTcpSocket,
 )
 
 from remotedesktop.config import (
@@ -47,8 +49,16 @@ _MAX_SEND_BACKLOG = 8 * 1024 * 1024
 _PREAUTH_MAX_PAYLOAD = 64 * 1024
 
 
-def _peer(sock: QSslSocket) -> str:
+def _peer(sock: QTcpSocket) -> str:
     return f"{sock.peerAddress().toString()}:{sock.peerPort()}"
+
+
+def _coord(value) -> float:
+    """Coerce a coordinate from an input message; malformed values raise
+    TypeError/ValueError, which the caller treats as a bad message."""
+    if value is None:
+        raise TypeError("missing coordinate")
+    return float(value)
 
 
 class ShareServer(QObject):
@@ -141,7 +151,8 @@ class ShareServer(QObject):
 
     def _on_new_connection(self) -> None:
         while self._server.hasPendingConnections():
-            sock = self._server.nextPendingConnection()
+            # QSslServer hands out QSslSockets; the stubs say QTcpSocket.
+            sock = cast(QSslSocket, self._server.nextPendingConnection())
             self.status.emit(
                 f"Incoming TLS connection from {_peer(sock)} "
                 f"(encrypted={sock.isEncrypted()}) — waiting for hello"
@@ -299,7 +310,7 @@ class ShareServer(QObject):
         try:
             match action:
                 case "move":
-                    self._injector.move(x, y)
+                    self._injector.move(_coord(x), _coord(y))
                 case "button":
                     pressed = bool(message.get("pressed"))
                     name = str(message.get("button"))
@@ -308,7 +319,7 @@ class ShareServer(QObject):
                     (buttons.add if pressed else buttons.discard)(name)
                     self.status.emit(f"Injected {name} button {'down' if pressed else 'up'}")
                 case "wheel":
-                    self._injector.wheel(x, y, int(message.get("dy", 0)))
+                    self._injector.wheel(_coord(x), _coord(y), int(message.get("dy", 0)))
                 case "key":
                     pressed = bool(message.get("pressed"))
                     vk = int(message.get("vk", 0))
@@ -380,8 +391,8 @@ class ShareServer(QObject):
             return
         buffer = QBuffer()
         buffer.open(QBuffer.OpenModeFlag.WriteOnly)
-        image.save(buffer, "JPEG", JPEG_QUALITY)
-        jpeg = bytes(buffer.data())
+        image.save(buffer, "JPEG", JPEG_QUALITY)  # ty: ignore[no-matching-overload]
+        jpeg = bytes(buffer.data())  # ty: ignore[invalid-argument-type]
         for stream in self._streams:
             if stream.socket.bytesToWrite() > _MAX_SEND_BACKLOG:
                 continue  # client is not keeping up; drop this frame for it
@@ -516,7 +527,7 @@ class ShareClient(QObject):
                     self._clipboard.apply(message)
 
     def _on_frame(self, jpeg: bytes) -> None:
-        image = QImage.fromData(jpeg, "JPEG")
+        image = QImage.fromData(jpeg, "JPEG")  # ty: ignore[invalid-argument-type]
         if image.isNull():
             self.status.emit(f"Received undecodable frame ({len(jpeg)} bytes)")
             return

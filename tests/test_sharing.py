@@ -56,9 +56,10 @@ def test_first_connection_prompts_pairs_and_streams(qapp, credentials, tmp_path)
         assert frames[0].width() > 0
         # The server issued a token and the client stored it.
         assert CLIENT_ID in PairedClients(db.connect(tmp_path / "server.db"))
-        assert KnownServers(db.connect(tmp_path / "client.db")).get(
+        record = KnownServers(db.connect(tmp_path / "client.db")).get(
             f"127.0.0.1:{server.port}"
-        )["token"]
+        )
+        assert record is not None and record["token"]
     finally:
         client.close()
         server.close()
@@ -248,6 +249,7 @@ def test_stored_fingerprint_updates_when_server_cert_changes(qapp, credentials, 
         pump(qapp, lambda: names2)
         assert prompts == []  # the paired token still authenticates
         stored = KnownServers(db.connect(tmp_path / "client.db")).get(f"127.0.0.1:{port}")
+        assert stored is not None
         assert stored["fingerprint"] == tls.certificate_fingerprint(new_credentials[0])
     finally:
         client2.close()
