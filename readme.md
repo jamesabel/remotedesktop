@@ -9,6 +9,10 @@
 A Python client/server application that provides remote desktop for Windows
 computers on the same LAN, with autodiscovery of servers.
 
+The server can optionally start automatically when you log in to Windows —
+a checkbox on its Status tab registers it under the per-user Run key (no
+administrator rights needed).
+
 Connections are made to the desktop screen, keyboard, mouse, and clipboard.
 Other connections are not provided, such as shared drives, devices, or
 multimedia (e.g., audio).

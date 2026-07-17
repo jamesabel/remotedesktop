@@ -4,11 +4,14 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer
 from PySide6.QtWidgets import QMessageBox
 
 from remotedesktop import db
+from remotedesktop.autostart import Autostart
 from remotedesktop.config import PairedClients
 from remotedesktop.server import ServerWindow
 
 from test_discovery import free_udp_port
 from test_sharing import CLIENT_ID, make_client, pump
+
+_TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 
 
 def make_window(credentials, tmp_path, *, discovery_port=None, connect_port=0):
@@ -19,6 +22,7 @@ def make_window(credentials, tmp_path, *, discovery_port=None, connect_port=0):
         paired=PairedClients(connection),
         credentials=credentials,
         connection=connection,
+        autostart=Autostart(key_path=_TEST_AUTOSTART_KEY, value_name="window-test"),
     )
 
 
@@ -66,6 +70,19 @@ def test_window_reports_connect_port_conflict(qapp, credentials, tmp_path):
             window.close()
     finally:
         blocker.close()
+
+
+def test_autostart_checkbox_toggles_registration(qapp, credentials, tmp_path):
+    window = make_window(credentials, tmp_path)
+    try:
+        assert not window._autostart.is_enabled()
+        window.autostart_checkbox.setChecked(True)
+        assert window._autostart.is_enabled()
+        assert "start at login" in window.connection_log.toPlainText()
+        window.autostart_checkbox.setChecked(False)
+        assert not window._autostart.is_enabled()
+    finally:
+        window.close()
 
 
 def test_approval_prompt_pairs_client_and_updates_summary(qapp, credentials, tmp_path, monkeypatch):
