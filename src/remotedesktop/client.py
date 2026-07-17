@@ -21,9 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db
+from remotedesktop import db, window_state
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import KnownServers, default_db_path, load_client_identity
+from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareClient
@@ -123,6 +123,8 @@ class ClientWindow(QMainWindow):
         self._server_key = ""
         self._frame_count = 0
         self.statusBar().showMessage("Not connected")
+        self._settings = Settings(self._db)
+        window_state.restore_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
         self.log("Client started")
 
     def log(self, message: str) -> None:
@@ -223,6 +225,7 @@ class ClientWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        window_state.save_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
         if self._client is not None:
             self._client.close()
         super().closeEvent(event)

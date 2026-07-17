@@ -18,9 +18,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, tls
+from remotedesktop import db, tls, window_state
 from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import PairedClients, default_config_dir, default_db_path
+from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
     DISCOVERY_PORT,
@@ -103,6 +103,8 @@ class ServerWindow(QMainWindow):
                     f"(UDP port {discovery_port}, TCP port {self.share_server.port})"
                 )
         self._update_summary(0)
+        self._settings = Settings(self._db)
+        window_state.restore_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
 
     def log(self, message: str) -> None:
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
@@ -151,6 +153,7 @@ class ServerWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        window_state.save_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
         if self.responder is not None:
             self.responder.stop()
         self.share_server.close()
