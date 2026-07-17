@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
 from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
@@ -94,6 +95,7 @@ class ClientWindow(QMainWindow):
         self.discovery_panel.status.connect(self.log)
         self.viewer.inputEvent.connect(self._on_input_event)
 
+        self._clipboard = ClipboardSync(parent=self)
         self._client: ShareClient | None = None
         self._connected = False
         self._server_name = ""
@@ -112,7 +114,7 @@ class ClientWindow(QMainWindow):
         self._server_name = server.name
         self._frame_count = 0
         self._connected = False
-        client = ShareClient(parent=self)
+        client = ShareClient(clipboard=self._clipboard, parent=self)
         self._client = client
         client.status.connect(self.log)
         client.connected.connect(self._on_connected)

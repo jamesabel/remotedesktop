@@ -44,6 +44,7 @@ class ShareServer(QObject):
         approved: ApprovedClients | None = None,
         fps: int = DEFAULT_FPS,
         injector: InputInjector | None = None,
+        clipboard=None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -51,6 +52,9 @@ class ShareServer(QObject):
         self._approved = approved if approved is not None else ApprovedClients()
         self._fps = fps
         self._injector = injector if injector is not None else InputInjector()
+        self._clipboard = clipboard
+        if clipboard is not None:
+            clipboard.changed.connect(self._broadcast_clipboard)
         self._streams: list[MessageStream] = []
         self._controllers: set[MessageStream] = set()
         self._server = QTcpServer(self)
@@ -103,6 +107,11 @@ class ShareServer(QObject):
         if message.get("type") == "input":
             if stream in self._streams:
                 self._inject(stream, message)
+            return
+        if message.get("type") == "clipboard":
+            if stream in self._streams and self._clipboard is not None:
+                self.status.emit(f"Clipboard update received from {_peer(stream.socket)}")
+                self._clipboard.apply(message)
             return
         if message.get("type") != "hello" or stream in self._streams:
             return
@@ -172,6 +181,14 @@ class ShareServer(QObject):
         except (TypeError, ValueError) as error:
             self.status.emit(f"Ignoring malformed input message: {error}")
 
+    def _broadcast_clipboard(self, payload: dict) -> None:
+        if not self._streams:
+            return
+        self.status.emit(f"Sending clipboard update to {len(self._streams)} viewer(s)")
+        message = {"type": "clipboard", **payload}
+        for stream in self._streams:
+            stream.send_json(message)
+
     def _drop(self, stream: MessageStream) -> None:
         self._controllers.discard(stream)
         if stream not in self._streams:
@@ -214,11 +231,18 @@ class ShareClient(QObject):
     status = Signal(str)
 
     def __init__(
-        self, identity: tuple[str, str] | None = None, parent: QObject | None = None
+        self,
+        identity: tuple[str, str] | None = None,
+        *,
+        clipboard=None,
+        parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._client_id, self._name = identity or load_client_identity()
         self._got_first_frame = False
+        self._clipboard = clipboard
+        if clipboard is not None:
+            clipboard.changed.connect(self._send_clipboard)
         self._socket = QTcpSocket(self)
         self._stream = MessageStream(self._socket, self)
         self._socket.connected.connect(self._send_hello)
@@ -240,6 +264,11 @@ class ShareClient(QObject):
     def send_input(self, event: dict) -> None:
         if self._socket.state() == QTcpSocket.SocketState.ConnectedState:
             self._stream.send_json({"type": "input", **event})
+
+    def _send_clipboard(self, payload: dict) -> None:
+        if self._socket.state() == QTcpSocket.SocketState.ConnectedState:
+            self.status.emit("Sending local clipboard to server")
+            self._stream.send_json({"type": "clipboard", **payload})
 
     def _send_hello(self) -> None:
         self.status.emit(
@@ -270,6 +299,10 @@ class ShareClient(QObject):
                 reason = str(message.get("reason", "denied"))
                 self.status.emit(f"Server denied the connection: {reason}")
                 self.denied.emit(reason)
+            case "clipboard":
+                if self._clipboard is not None:
+                    self.status.emit("Clipboard update received from server")
+                    self._clipboard.apply(message)
 
     def _on_frame(self, jpeg: bytes) -> None:
         image = QImage.fromData(jpeg, "JPEG")

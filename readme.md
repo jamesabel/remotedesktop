@@ -17,11 +17,13 @@ This does not use Windows RDP nor rely on any Microsoft-based authentication.
 
 ## Status
 
-Early development. Autodiscovery, live screen viewing, and mouse/keyboard
-control work: a running server appears in the client's *Servers* panel;
-opening it (after the server user approves the first connection) shows the
-remote screen, and clicking into the view forwards mouse and keyboard input
-to the server. Clipboard sharing is not implemented yet.
+The core feature set works: autodiscovery, live screen viewing,
+mouse/keyboard control, and two-way clipboard sync. A running server appears
+in the client's *Servers* panel; opening it (after the server user approves
+the first connection) shows the remote screen, clicking into the view
+forwards mouse and keyboard input, and text/images copied on either side
+appear on the other. The connection is currently unencrypted, so use it only
+on a trusted LAN.
 
 ## Requirements
 

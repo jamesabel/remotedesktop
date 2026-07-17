@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import ApprovedClients
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
@@ -48,7 +49,10 @@ class ServerWindow(QMainWindow):
         layout.addWidget(self.connection_log, stretch=1)
         self.setCentralWidget(central)
 
-        self.share_server = ShareServer(self._ask_approval, approved=approved, parent=self)
+        self._clipboard = ClipboardSync(parent=self)
+        self.share_server = ShareServer(
+            self._ask_approval, approved=approved, clipboard=self._clipboard, parent=self
+        )
         self.share_server.status.connect(self.log)
         self.share_server.clientCountChanged.connect(self._update_summary)
         self._listening = self.share_server.listen(connect_port)
