@@ -351,6 +351,22 @@ def test_rate_unit_matches_format_rate_unit():
     assert unit * nice_ceiling(70000.0 / unit) == 100.0 * 1024.0
 
 
+def test_rtt_lines_are_named_for_the_side_that_pings(qapp):
+    monitor = PerformanceMonitor()
+    client_tab = PerformanceTab(monitor, local="client", remote="server")
+    server_tab = PerformanceTab(monitor, local="server", remote="client")
+    # This side's own measurement (rtt_ms) is listed first; the same physical
+    # measurement carries the same name in both apps.
+    assert [label for label, _c, series in client_tab.ping_graph._series] == [
+        "client → server",
+        "server → client",
+    ]
+    assert [label for label, _c, series in server_tab.ping_graph._series] == [
+        "server → client",
+        "client → server",
+    ]
+
+
 def test_graph_widgets_render_headless(qapp):
     seeded = PerformanceMonitor()
     seeded.send_bps.add(100.0)
