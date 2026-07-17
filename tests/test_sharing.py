@@ -1,3 +1,4 @@
+import logging
 import time
 
 from PySide6.QtCore import QEventLoop
@@ -395,6 +396,44 @@ def test_disconnected_client_paths_are_noops(qapp, tmp_path):
     client._on_ssl_errors([_FakeSslError()])
     assert any("Ignoring expected TLS" in s for s in statuses)
     client.close()
+
+
+def test_backlogged_viewer_frame_drop_is_reported(qapp, credentials, tmp_path, monkeypatch):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    statuses: list[str] = []
+    server.status.connect(statuses.append)
+    client = make_client(tmp_path)
+    frames = []
+    client.frameReceived.connect(frames.append)
+    # A negative cap makes every stream count as backlogged, so no frames go out.
+    monkeypatch.setattr("remotedesktop.sharing._MAX_SEND_BACKLOG", -1)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: any("not keeping up" in s for s in statuses))
+        assert sum("not keeping up" in s for s in statuses) == 1  # reported once, not per frame
+        assert not frames
+        # Once the backlog clears the server says so and frames resume.
+        monkeypatch.setattr("remotedesktop.sharing._MAX_SEND_BACKLOG", 8 * 1024 * 1024)
+        pump(qapp, lambda: frames)
+        assert any("caught up" in s for s in statuses)
+    finally:
+        client.close()
+        server.close()
+
+
+def test_oversized_preauth_message_aborts_and_logs(qapp, credentials, tmp_path, caplog):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    sock, stream = raw_tls_stream(qapp, server.port)
+    caplog.set_level(logging.DEBUG, logger="remotedesktop")
+    try:
+        # Larger than the pre-auth 64 KB cap: the server aborts the socket
+        # and the reason must land in the debug log.
+        stream.send_frame(b"x" * (128 * 1024))
+        pump(qapp, lambda: sock.state() != QSslSocket.SocketState.ConnectedState)
+        assert any("exceeds the" in r.getMessage() for r in caplog.records)
+    finally:
+        sock.abort()
+        server.close()
 
 
 def test_server_reports_phases_in_status(qapp, credentials, tmp_path):

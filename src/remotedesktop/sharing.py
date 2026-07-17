@@ -14,6 +14,7 @@ GUIs can show a debug log.
 """
 
 import hmac
+import logging
 import socket as socket_module
 from collections.abc import Callable
 from typing import cast
@@ -39,6 +40,8 @@ from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop.input_injection import InputInjector
 from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
 from remotedesktop import db, tls
+
+_log = logging.getLogger("remotedesktop.sharing")
 
 DEFAULT_FPS = 10
 JPEG_QUALITY = 70
@@ -99,6 +102,9 @@ class ShareServer(QObject):
         self._final: set[MessageStream] = set()
         # What each controlling stream currently holds down: (buttons, vks).
         self._pressed: dict[MessageStream, tuple[set[str], set[int]]] = {}
+        # Streams currently too far behind to receive frames (see
+        # _broadcast_frame); entering/leaving this set emits a status message.
+        self._backlogged: set[MessageStream] = set()
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -144,6 +150,7 @@ class ShareServer(QObject):
         self._prompting.clear()
         self._final.clear()
         self._pressed.clear()
+        self._backlogged.clear()
         if had_clients:
             self.clientCountChanged.emit(0)
         self._server.close()
@@ -159,6 +166,9 @@ class ShareServer(QObject):
             )
             stream = MessageStream(sock, self, max_payload=_PREAUTH_MAX_PAYLOAD)
             self._all_streams.add(stream)
+            sock.stateChanged.connect(
+                lambda state, s=sock: _log.debug("Socket %s state: %s", _peer(s), state.name)
+            )
             sock.disconnected.connect(lambda s=stream: self._drop(s))
             sock.errorOccurred.connect(
                 lambda _error, s=sock: self.status.emit(
@@ -359,6 +369,7 @@ class ShareServer(QObject):
         self._controllers.discard(stream)
         self._all_streams.discard(stream)
         self._prompting.discard(stream)
+        self._backlogged.discard(stream)
         self._release_input(stream)
         final = stream in self._final
         self._final.discard(stream)
@@ -401,7 +412,21 @@ class ShareServer(QObject):
         jpeg = bytes(buffer.data())  # ty: ignore[invalid-argument-type]
         for stream in self._streams:
             if stream.socket.bytesToWrite() > _MAX_SEND_BACKLOG:
-                continue  # client is not keeping up; drop this frame for it
+                # Client is not keeping up; drop frames for it (and say so —
+                # to the viewer this looks like a frozen or flaky connection).
+                if stream not in self._backlogged:
+                    self._backlogged.add(stream)
+                    self.status.emit(
+                        f"Viewer at {_peer(stream.socket)} is not keeping up "
+                        f"({stream.socket.bytesToWrite() // 1024} KB unsent) — "
+                        "dropping frames for it"
+                    )
+                continue
+            if stream in self._backlogged:
+                self._backlogged.discard(stream)
+                self.status.emit(
+                    f"Viewer at {_peer(stream.socket)} caught up — resuming frames"
+                )
             stream.send_frame(jpeg)
 
 
@@ -435,9 +460,13 @@ class ShareClient(QObject):
         self._server_key = ""
         self._server_fingerprint = ""
         self._server_token: str | None = None
+        self._frame_count = 0
         self._socket = QSslSocket(self)
         self._socket.setSslConfiguration(tls.client_configuration())
         self._stream = MessageStream(self._socket, self)
+        self._socket.stateChanged.connect(
+            lambda state: _log.debug("Client socket state: %s", state.name)
+        )
         self._socket.encrypted.connect(self._on_encrypted)
         self._socket.sslErrors.connect(self._on_ssl_errors)
         self._socket.disconnected.connect(self._on_disconnected)
@@ -450,6 +479,7 @@ class ShareClient(QObject):
     def connect_to(self, host: str, port: int) -> None:
         self._socket.abort()  # drop any previous connection or attempt
         self._got_first_frame = False
+        self._frame_count = 0
         self._server_key = f"{host}:{port}"
         record = self._known.get(self._server_key) if self._known else None
         self._server_token = record.get("token") if record else None
@@ -548,5 +578,16 @@ class ShareClient(QObject):
             self.status.emit(
                 f"First frame received: {image.width()}x{image.height()} "
                 f"({len(jpeg) // 1024} KB as JPEG)"
+            )
+        self._frame_count += 1
+        # A heartbeat in the debug log (~10 s at the default fps): gaps between
+        # these lines show exactly when the stream stalled.
+        if self._frame_count % 100 == 0:
+            _log.debug(
+                "Received %d frames (latest %dx%d, %d KB)",
+                self._frame_count,
+                image.width(),
+                image.height(),
+                len(jpeg) // 1024,
             )
         self.frameReceived.emit(image)

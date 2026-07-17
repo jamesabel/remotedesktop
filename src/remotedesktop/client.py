@@ -1,6 +1,7 @@
 """Client GUI application: discovers servers on the LAN, connects to one,
 and shows its desktop in a viewer widget."""
 
+import logging
 import sqlite3
 import sys
 import threading
@@ -22,13 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, window_state
+from remotedesktop import db, logs, window_state
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
+
+_log = logging.getLogger("remotedesktop.client")
 
 
 class DiscoveryPanel(QWidget):
@@ -135,6 +138,9 @@ class ClientWindow(QMainWindow):
             self.discovery_panel.refresh()
 
     def log(self, message: str) -> None:
+        # Everything shown in the Connection log pane also goes to the debug
+        # log file (when main() enabled it), so it survives the window.
+        _log.info(message)
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
     def _forget_server(self, key: str) -> None:
@@ -249,10 +255,11 @@ class ClientWindow(QMainWindow):
 
 
 def main() -> None:  # pragma: no cover - runs the Qt event loop
+    log_path = logs.init_logging("client")
     app = QApplication(sys.argv)
-    window = ClientWindow()
+    window = ClientWindow()  # auto_scan starts the first LAN scan
+    window.log(f"Detailed log: {log_path}")
     window.show()
-    window.discovery_panel.refresh()
     raise SystemExit(app.exec())
 
 
