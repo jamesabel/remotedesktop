@@ -80,7 +80,8 @@ def test_inventory_tab_stretches_a_spacer_not_the_last_data_column(qapp):
     tab = InventoryTab(inv)
     spacer = tab._table.columnCount() - 1
     assert spacer == len(InventoryTab._COLUMNS)  # one extra column on the right
-    assert tab._table.horizontalHeaderItem(spacer).text() == ""
+    header_item = tab._table.horizontalHeaderItem(spacer)
+    assert header_item is not None and header_item.text() == ""
     assert tab._table.item(0, spacer) is None  # never populated
     assert tab._table.horizontalHeader().stretchLastSection()
 
