@@ -1,6 +1,6 @@
 """Viewer widget that displays the remote desktop and forwards input to it."""
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QFocusEvent,
     QImage,
@@ -32,7 +32,10 @@ class ViewerWidget(QWidget):
         # The frame stays at the server's full resolution; what is painted is
         # a SmoothTransformation-scaled copy (proper filtering, unlike the
         # nearest-neighbor scaling of drawPixmap into a rect), cached until
-        # the frame or the display size changes.
+        # the frame or the display size changes. It is scaled to *device*
+        # pixels and stamped with the devicePixelRatio: sizing it in logical
+        # pixels would make Qt bilinear-upscale it again by the Windows
+        # display-scaling factor (125-150% on most monitors), blurring text.
         self._scaled: QPixmap | None = None
         self._message = "Not connected"
         # Buttons/keys currently held, so releases can be forwarded even when
@@ -175,10 +178,21 @@ class ViewerWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
             return
         rect = self._display_rect().toRect()
-        if self._scaled is None or self._scaled.size() != rect.size():
-            self._scaled = self._frame.scaled(
-                rect.size(),
-                Qt.AspectRatioMode.IgnoreAspectRatio,  # rect is already aspect-correct
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        dpr = self.devicePixelRatioF()
+        target = QSize(round(rect.width() * dpr), round(rect.height() * dpr))
+        if (
+            self._scaled is None
+            or self._scaled.size() != target
+            or self._scaled.devicePixelRatio() != dpr
+        ):
+            if self._frame.size() == target:
+                # Displayed at exactly 1:1 device pixels — no resample at all.
+                self._scaled = QPixmap(self._frame)
+            else:
+                self._scaled = self._frame.scaled(
+                    target,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,  # rect is already aspect-correct
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            self._scaled.setDevicePixelRatio(dpr)
         painter.drawPixmap(rect.topLeft(), self._scaled)
