@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import db, tls, window_state
+from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
 from remotedesktop.discovery import (
@@ -40,18 +42,25 @@ class ServerWindow(QMainWindow):
         paired: PairedClients | None = None,
         credentials=None,
         connection: sqlite3.Connection | None = None,
+        autostart: Autostart | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Server")
         self._name = socket.gethostname()
 
         self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self._autostart = autostart if autostart is not None else Autostart()
+        self.autostart_checkbox = QCheckBox("Start this server when I log in to Windows")
+        self.autostart_checkbox.setChecked(self._autostart.is_enabled())
+        self.autostart_checkbox.setEnabled(self._autostart.available)
+        self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
         self.connection_log = QPlainTextEdit()
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
         status_tab = QWidget()
         status_layout = QVBoxLayout(status_tab)
         status_layout.addWidget(self._summary)
+        status_layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         status_layout.addWidget(self.connection_log, stretch=1)
 
         # Tests inject a connection to a temp database; the app uses the default.
@@ -136,6 +145,12 @@ class ServerWindow(QMainWindow):
             else "Not sharing"
         )
         self._summary.setText(f"{discoverable}\n{sharing}")
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        self._autostart.set_enabled(checked)
+        self.log(
+            "Server will start at login" if checked else "Server will no longer start at login"
+        )
 
     def _revoke_client(self, client_id: str) -> None:
         answer = QMessageBox.question(
