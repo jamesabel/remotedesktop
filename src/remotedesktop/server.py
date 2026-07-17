@@ -108,7 +108,10 @@ class ServerWindow(QMainWindow):
             InventoryTab(self.inventory, "Revoke access", self._revoke_client),
             "Clients on LAN",
         )
-        tabs.addTab(PerformanceTab(self.performance), "Performance")
+        tabs.addTab(
+            PerformanceTab(self.performance, local="server", remote="client"),
+            "Performance",
+        )
         tabs.addTab(log_tab, "Connection log")
         tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
         self.setCentralWidget(tabs)

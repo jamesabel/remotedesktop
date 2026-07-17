@@ -418,7 +418,14 @@ class PerformanceTab(QWidget):
     monitor regardless, but a background tab schedules zero paint work.
     """
 
-    def __init__(self, monitor: PerformanceMonitor, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        monitor: PerformanceMonitor,
+        *,
+        local: str = "client",
+        remote: str = "server",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._monitor = monitor
         self.bandwidth_graph = GraphWidget(
@@ -431,11 +438,14 @@ class PerformanceTab(QWidget):
             format_rate,
             tick_unit=rate_unit,
         )
+        # Each line is named for the side that sent the ping, so the same
+        # line has the same name in both apps ("client → server" is the
+        # client-measured round trip on either end).
         self.ping_graph = GraphWidget(
             "Round-trip time",
             [
-                ("this side", QColor("#ff9800"), monitor.rtt_ms),
-                ("peer", QColor("#9c27b0"), monitor.peer_rtt_ms),
+                (f"{local} → {remote}", QColor("#ff9800"), monitor.rtt_ms),
+                (f"{remote} → {local}", QColor("#9c27b0"), monitor.peer_rtt_ms),
             ],
             monitor,
             format_ms,

@@ -110,7 +110,10 @@ class ClientWindow(QMainWindow):
             InventoryTab(self.inventory, "Forget server", self._forget_server),
             "Servers on LAN",
         )
-        tabs.addTab(PerformanceTab(self.performance), "Performance")
+        tabs.addTab(
+            PerformanceTab(self.performance, local="client", remote="server"),
+            "Performance",
+        )
         self.setCentralWidget(tabs)
 
         self.discovery_panel = DiscoveryPanel(self)
