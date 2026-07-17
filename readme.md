@@ -96,3 +96,13 @@ uv run pytest    # run the tests
 Run the tests from PowerShell or cmd, not Git Bash: Git Bash puts Git's
 MinGW OpenSSL DLLs on `PATH`, which Qt's TLS backend loads and crashes on.
 From PowerShell, Qt uses the Windows schannel backend as intended.
+
+### The `badges` branch
+
+The coverage badge above is served from the `badges` branch
+(`raw.githubusercontent.com/.../badges/coverage.svg`). CI regenerates the
+SVG after each test run on `master` and force-pushes it there as a single
+orphan commit. It lives on its own branch because `master` only accepts
+pull requests (a repository ruleset), so CI cannot commit to it directly;
+keeping the badge in the repo avoids depending on an external coverage
+service. The branch is generated output — never branch from it or merge it.
