@@ -256,6 +256,8 @@ class ShareServer(QObject):
             )
         else:
             self.status.emit(f'"{client_name}" is new — asking for permission')
+        # Tell the client it's waiting on a human, not a stalled connection.
+        stream.send_json({"type": "pending"})
         # The approval prompt is modal: a nested event loop runs while it is
         # open, so this stream can disconnect (and _drop can run) meanwhile.
         self._prompting.add(stream)
@@ -407,6 +409,7 @@ class ShareClient(QObject):
     """Connects to a ShareServer over TLS, authenticates, and emits frames."""
 
     connected = Signal(str)  # server name
+    approvalPending = Signal()  # server is asking its user for permission
     denied = Signal(str)  # reason
     disconnected = Signal()
     frameReceived = Signal(QImage)
@@ -521,6 +524,11 @@ class ShareClient(QObject):
                     f'Server "{name}" accepted the connection — waiting for first frame'
                 )
                 self.connected.emit(name)
+            case "pending":
+                self.status.emit(
+                    "Server is asking its user for permission — waiting for approval"
+                )
+                self.approvalPending.emit()
             case "denied":
                 reason = str(message.get("reason", "denied"))
                 self.status.emit(f"Server denied the connection: {reason}")

@@ -12,7 +12,8 @@ from test_sharing import pump
 
 
 def make_window(tmp_path):
-    return ClientWindow(connection=db.connect(tmp_path / "client.db"))
+    # auto_scan=False: window tests must never broadcast a discovery probe on the LAN.
+    return ClientWindow(connection=db.connect(tmp_path / "client.db"), auto_scan=False)
 
 
 def make_share_server(credentials, tmp_path, *, approve=lambda *_: True):
@@ -64,6 +65,28 @@ def test_connect_view_and_disconnect_full_flow(qapp, credentials, tmp_path):
         server.close()
         pump(qapp, lambda: not window._connected)
         assert window.inventory._peers[key].state == "disconnected"
+    finally:
+        window.close()
+        server.close()
+
+
+def test_waiting_for_approval_is_shown_while_server_prompts(qapp, credentials, tmp_path):
+    window = make_window(tmp_path)
+
+    def approve(cid, name):
+        # While the server-side prompt is "open", the client window must show
+        # the waiting state (pump until the pending message arrives).
+        pump(
+            qapp,
+            lambda: "Waiting for the user on box" in window.statusBar().currentMessage(),
+        )
+        return True
+
+    server = make_share_server(credentials, tmp_path, approve=approve)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window.viewer.has_frame)
+        assert "asking its user for permission" in window.connection_log.toPlainText()
     finally:
         window.close()
         server.close()
