@@ -163,12 +163,21 @@ class ServerWindow(QMainWindow):
             self.share_server.revoke_client(client_id)
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:
-        answer = QMessageBox.question(
-            self,
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
             "Connection request",
             f'Allow "{client_name}" to view this desktop?\n\nClient id: {client_id}',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self,
         )
-        return answer == QMessageBox.StandardButton.Yes
+        # The server usually isn't the foreground app when a request arrives,
+        # and Windows won't give focus to a background app's dialog — keep it
+        # on top so it can't sit unnoticed behind other windows.
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        box.show()
+        box.raise_()
+        box.activateWindow()
+        return box.exec() == QMessageBox.StandardButton.Yes
 
     def closeEvent(self, event: QCloseEvent) -> None:
         window_state.save_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)

@@ -85,10 +85,19 @@ def test_autostart_checkbox_toggles_registration(qapp, credentials, tmp_path):
         window.close()
 
 
+def stub_approval_prompt(monkeypatch, button):
+    """Answer _ask_approval's stay-on-top QMessageBox without showing any UI.
+
+    The approval prompt is an instance QMessageBox (show + exec), not
+    QMessageBox.question, so both methods are stubbed: show so nothing pops
+    up on screen, exec so the "user" answers immediately.
+    """
+    monkeypatch.setattr(QMessageBox, "show", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: button)
+
+
 def test_approval_prompt_pairs_client_and_updates_summary(qapp, credentials, tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
-    )
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
     window = make_window(credentials, tmp_path)
     client = make_client(tmp_path)
     names = []
@@ -105,9 +114,7 @@ def test_approval_prompt_pairs_client_and_updates_summary(qapp, credentials, tmp
 
 
 def test_refused_approval_denies_client(qapp, credentials, tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
-    )
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.No)
     window = make_window(credentials, tmp_path)
     client = make_client(tmp_path)
     denials = []
@@ -122,6 +129,8 @@ def test_refused_approval_denies_client(qapp, credentials, tmp_path, monkeypatch
 
 
 def test_revoke_via_window_disconnects_client(qapp, credentials, tmp_path, monkeypatch):
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    # The revoke confirmation is still QMessageBox.question — patch it separately.
     monkeypatch.setattr(
         QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
     )

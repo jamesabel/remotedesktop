@@ -99,6 +99,35 @@ def test_reconnect_uses_token_without_prompting(qapp, credentials, tmp_path):
         server.close()
 
 
+def test_approval_pending_is_signaled_only_when_prompting(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    try:
+        # First connection: the server prompts, so the client hears "pending"
+        # before it is admitted.
+        client = make_client(tmp_path)
+        events: list[str] = []
+        client.approvalPending.connect(lambda: events.append("pending"))
+        client.connected.connect(lambda _name: events.append("connected"))
+        client.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: "connected" in events)
+        assert events == ["pending", "connected"]
+        client.close()
+        pump(qapp, lambda: True, timeout=0.3)
+
+        # Token reconnect: no prompt on the server, so no pending signal.
+        client2 = make_client(tmp_path)
+        events2: list[str] = []
+        client2.approvalPending.connect(lambda: events2.append("pending"))
+        client2.connected.connect(lambda _name: events2.append("connected"))
+        client2.connect_to("127.0.0.1", server.port)
+        pump(qapp, lambda: "connected" in events2)
+        assert events2 == ["connected"]
+    finally:
+        client2.close()
+        client.close()
+        server.close()
+
+
 def test_revoke_disconnects_and_requires_reapproval(qapp, credentials, tmp_path):
     prompts = []
     server = make_server(

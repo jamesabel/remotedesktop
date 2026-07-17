@@ -83,7 +83,9 @@ class DiscoveryPanel(QWidget):
 
 
 class ClientWindow(QMainWindow):
-    def __init__(self, *, connection: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self, *, connection: sqlite3.Connection | None = None, auto_scan: bool = True
+    ) -> None:
         super().__init__()
         self.setWindowTitle("Remote Desktop Client")
         # Tests inject a connection to a temp database; the app uses the default.
@@ -128,6 +130,9 @@ class ClientWindow(QMainWindow):
         self._settings = Settings(self._db)
         window_state.restore_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
         self.log("Client started")
+        # Tests pass auto_scan=False so window tests never broadcast on the LAN.
+        if auto_scan:
+            self.discovery_panel.refresh()
 
     def log(self, message: str) -> None:
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
@@ -180,12 +185,22 @@ class ClientWindow(QMainWindow):
         self._client = client
         client.status.connect(self.log)
         client.connected.connect(self._on_connected)
+        client.approvalPending.connect(self._on_approval_pending)
         client.denied.connect(self._on_denied)
         client.disconnected.connect(self._on_disconnected)
         client.frameReceived.connect(self._on_frame)
         self.viewer.clear(f"Connecting to {server.name} …")
         self.statusBar().showMessage(f"Connecting to {server.name} ({server.host}:{server.port}) …")
         client.connect_to(server.host, server.port)
+
+    def _on_approval_pending(self) -> None:
+        self.viewer.clear(
+            f"Waiting for approval — someone at {self._server_name} "
+            "must allow this connection"
+        )
+        self.statusBar().showMessage(
+            f"Waiting for the user on {self._server_name} to approve this computer …"
+        )
 
     def _on_connected(self, server_name: str) -> None:
         self._server_name = server_name or self._server_name
