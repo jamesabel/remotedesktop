@@ -8,10 +8,14 @@ the server window's own title bar enters the loop, and the mouse-up that
 would end it sits unread on a socket the frozen event loop never services,
 until someone at the server machine intervenes.
 
-Native WM_TIMER callbacks *are* dispatched inside modal loops, so between
-WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE a SetTimer callback pumps Qt events
-(user input excluded) every few milliseconds. A side benefit: screen
-sharing keeps streaming while the local user drags the server window.
+Native WM_TIMER callbacks *are* dispatched inside modal loops, so from the
+non-client mouse press (WM_NCLBUTTONDOWN — a press-and-hold that never
+moves blocks in DefWindowProc's click tracking without ever sending
+WM_ENTERSIZEMOVE) until the tracking loop releases mouse capture
+(WM_CAPTURECHANGED, or WM_EXITSIZEMOVE after an actual drag), a SetTimer
+callback pumps Qt events (user input excluded) every few milliseconds. A
+side benefit: screen sharing keeps streaming while the local user drags
+the server window.
 
 Feed every message from the window's `nativeEvent` to
 `handle_native_event`; the pump is inert off Windows. Tests inject a fake
@@ -28,6 +32,8 @@ from PySide6.QtCore import QCoreApplication, QEventLoop
 
 _log = logging.getLogger("remotedesktop.modal_loop")
 
+WM_NCLBUTTONDOWN = 0x00A1
+WM_CAPTURECHANGED = 0x0215
 WM_ENTERSIZEMOVE = 0x0231
 WM_EXITSIZEMOVE = 0x0232
 _TIMER_ID = 0x5244  # arbitrary but stable; scoped to the window's hwnd
@@ -74,24 +80,32 @@ class ModalLoopPump:
         if self._timers is None or bytes(event_type) != b"windows_generic_MSG":
             return
         msg = wintypes.MSG.from_address(int(message))
-        if msg.message == WM_ENTERSIZEMOVE:
+        # WM_ENTERSIZEMOVE alone is not enough: a press-and-hold on the title
+        # bar that never moves blocks the thread inside DefWindowProc's click
+        # tracking WITHOUT ever sending WM_ENTERSIZEMOVE, so the pump must
+        # arm on the non-client press itself. The tracking loop takes mouse
+        # capture, so WM_CAPTURECHANGED marks its end whether or not a drag
+        # (and its WM_EXITSIZEMOVE) ever happened.
+        if msg.message in (WM_NCLBUTTONDOWN, WM_ENTERSIZEMOVE):
             self._enter(msg.hWnd or 0)
-        elif msg.message == WM_EXITSIZEMOVE:
+        elif msg.message in (WM_CAPTURECHANGED, WM_EXITSIZEMOVE):
             self._exit()
 
     def _enter(self, hwnd: int) -> None:
+        if self._hwnd == hwnd:  # NCLBUTTONDOWN then ENTERSIZEMOVE: already armed
+            return
         if self._hwnd is not None:  # unbalanced enter: replace the old timer
             self._timers.stop(self._hwnd)
         self._hwnd = hwnd
         self._timers.start(hwnd)
-        _log.debug("Modal move/size loop entered — pumping Qt from a native timer")
+        _log.debug("Native mouse tracking started — pumping Qt from a native timer")
 
     def _exit(self) -> None:
         if self._hwnd is None:
             return
         self._timers.stop(self._hwnd)
         self._hwnd = None
-        _log.debug("Modal move/size loop exited")
+        _log.debug("Native mouse tracking ended")
 
     def _on_timer(self) -> None:
         if self._pumping:  # processEvents can dispatch this timer re-entrantly

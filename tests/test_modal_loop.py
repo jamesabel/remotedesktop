@@ -7,7 +7,13 @@ All tests inject a fake timer backend, so no real Win32 timer is created.
 import ctypes
 from ctypes import wintypes
 
-from remotedesktop.modal_loop import WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, ModalLoopPump
+from remotedesktop.modal_loop import (
+    WM_CAPTURECHANGED,
+    WM_ENTERSIZEMOVE,
+    WM_EXITSIZEMOVE,
+    WM_NCLBUTTONDOWN,
+    ModalLoopPump,
+)
 
 
 class FakeTimers:
@@ -54,6 +60,45 @@ def test_other_messages_and_event_types_are_ignored():
     pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(other))
     # A non-Windows event type must not even be parsed as a MSG pointer.
     pump.handle_native_event(b"xcb_generic_event_t", 0)
+    assert timers.calls == []
+
+
+def test_click_and_hold_without_drag_is_pumped():
+    # A press-and-hold on the title bar blocks in DefWindowProc's click
+    # tracking without ever sending WM_ENTERSIZEMOVE; the pump must arm on
+    # the press itself and disarm when the tracking loop releases capture.
+    timers = FakeTimers()
+    pump = ModalLoopPump(pump=lambda: None, timers=timers)
+    press = native_message(WM_NCLBUTTONDOWN)
+    release = native_message(WM_CAPTURECHANGED)
+    pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(press))
+    assert timers.calls == [("start", 0xBEEF)]
+    pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(release))
+    assert timers.calls == [("start", 0xBEEF), ("stop", 0xBEEF)]
+
+
+def test_press_followed_by_real_drag_keeps_one_timer():
+    # NCLBUTTONDOWN then ENTERSIZEMOVE (the hold turned into a drag) must not
+    # restart the timer, and either end message stops it exactly once.
+    timers = FakeTimers()
+    pump = ModalLoopPump(pump=lambda: None, timers=timers)
+    for message_id in (WM_NCLBUTTONDOWN, WM_ENTERSIZEMOVE):
+        msg = native_message(message_id)
+        pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(msg))
+    assert timers.calls == [("start", 0xBEEF)]
+    for message_id in (WM_CAPTURECHANGED, WM_EXITSIZEMOVE):
+        msg = native_message(message_id)
+        pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(msg))
+    assert timers.calls == [("start", 0xBEEF), ("stop", 0xBEEF)]
+
+
+def test_capture_change_without_press_is_ignored():
+    # Qt widgets take and release mouse capture during ordinary client-area
+    # clicks; a WM_CAPTURECHANGED with no pump running must do nothing.
+    timers = FakeTimers()
+    pump = ModalLoopPump(pump=lambda: None, timers=timers)
+    msg = native_message(WM_CAPTURECHANGED)
+    pump.handle_native_event(b"windows_generic_MSG", ctypes.addressof(msg))
     assert timers.calls == []
 
 
