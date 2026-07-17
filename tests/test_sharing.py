@@ -22,7 +22,9 @@ def pump(qapp, condition, timeout=10.0):
         qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
 
 
-def make_server(credentials, tmp_path, *, approve, injector=None, clipboard=None):
+def make_server(
+    credentials, tmp_path, *, approve, injector=None, clipboard=None, log_provider=None
+):
     # The server is a distinct "machine" from the client -> its own database.
     server = ShareServer(
         approve_client=approve,
@@ -30,16 +32,18 @@ def make_server(credentials, tmp_path, *, approve, injector=None, clipboard=None
         paired=PairedClients(db.connect(tmp_path / "server.db")),
         injector=injector,
         clipboard=clipboard,
+        log_provider=log_provider,
     )
     assert server.listen(0)
     return server
 
 
-def make_client(tmp_path, *, clipboard=None):
+def make_client(tmp_path, *, clipboard=None, log_provider=None):
     return ShareClient(
         identity=IDENTITY,
         known_servers=KnownServers(db.connect(tmp_path / "client.db")),
         clipboard=clipboard,
+        log_provider=log_provider,
     )
 
 
@@ -534,6 +538,62 @@ def test_oversized_preauth_message_aborts_and_logs(qapp, credentials, tmp_path, 
         assert any("exceeds the" in r.getMessage() for r in caplog.records)
     finally:
         sock.abort()
+        server.close()
+
+
+def test_client_fetches_the_server_log(qapp, credentials, tmp_path):
+    server = make_server(
+        credentials, tmp_path, approve=lambda *_: True,
+        log_provider=lambda: "SERVER LOG TAIL",
+    )
+    client = make_client(tmp_path)
+    connected, received = [], []
+    client.connected.connect(connected.append)
+    client.logReceived.connect(received.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.request_log()
+        pump(qapp, lambda: received)
+        assert received == ["SERVER LOG TAIL"]
+    finally:
+        client.close()
+        server.close()
+
+
+def test_server_fetches_the_client_log(qapp, credentials, tmp_path):
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    client = make_client(tmp_path, log_provider=lambda: "CLIENT LOG TAIL")
+    connected, received = [], []
+    client.connected.connect(connected.append)
+    server.logReceived.connect(lambda name, text: received.append((name, text)))
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        server.request_log()
+        pump(qapp, lambda: received)
+        assert received == [("test-client", "CLIENT LOG TAIL")]
+    finally:
+        client.close()
+        server.close()
+
+
+def test_log_request_without_a_provider_still_answers(qapp, credentials, tmp_path):
+    # The requesting side must never hang waiting: a peer with no log file
+    # (or none configured) answers with a placeholder.
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    client = make_client(tmp_path)
+    connected, received = [], []
+    client.connected.connect(connected.append)
+    client.logReceived.connect(received.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.request_log()
+        pump(qapp, lambda: received)
+        assert "no log available" in received[0]
+    finally:
+        client.close()
         server.close()
 
 

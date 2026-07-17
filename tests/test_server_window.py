@@ -28,6 +28,53 @@ def make_window(credentials, tmp_path, *, discovery_port=None, connect_port=0):
     )
 
 
+def test_get_client_log_button_needs_a_client(qapp, credentials, tmp_path):
+    window = make_window(credentials, tmp_path)
+    try:
+        window.get_log_button.click()
+        assert "No connected client" in window.connection_log.toPlainText()
+    finally:
+        window.close()
+
+
+def test_received_client_log_opens_a_viewer_dialog(qapp, credentials, tmp_path):
+    from remotedesktop.logs import PeerLogDialog
+
+    window = make_window(credentials, tmp_path)
+    try:
+        window._show_client_log("laptop", "some log text")
+        dialog = window.findChild(PeerLogDialog)
+        assert dialog is not None
+        assert 'Log from client "laptop"' == dialog.windowTitle()
+        dialog.close()
+    finally:
+        window.close()
+
+
+def test_native_size_move_messages_drive_the_modal_pump(qapp, credentials, tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    from shiboken6 import VoidPtr
+
+    from remotedesktop.modal_loop import WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, ModalLoopPump
+    from test_modal_loop import FakeTimers
+
+    window = make_window(credentials, tmp_path)
+    try:
+        timers = FakeTimers()
+        window._modal_pump = ModalLoopPump(pump=lambda: None, timers=timers)
+        msg = wintypes.MSG()
+        msg.hWnd, msg.message = 0xBEEF, WM_ENTERSIZEMOVE
+        # Qt hands nativeEvent a void*; VoidPtr is that shape from Python.
+        window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        msg.message = WM_EXITSIZEMOVE
+        window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        assert timers.calls == [("start", 0xBEEF), ("stop", 0xBEEF)]
+    finally:
+        window.close()
+
+
 def test_window_listens_and_is_discoverable(qapp, credentials, tmp_path):
     window = make_window(credentials, tmp_path)
     try:

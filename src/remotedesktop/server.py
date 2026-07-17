@@ -32,6 +32,8 @@ from remotedesktop.discovery import (
     DiscoveryResponder,
 )
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
+from remotedesktop.logs import PeerLogDialog, read_log_tail
+from remotedesktop.modal_loop import ModalLoopPump
 from remotedesktop.performance import PerformanceMonitor, PerformanceTab
 from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
 from remotedesktop.sharing import ShareServer
@@ -64,6 +66,20 @@ class ServerWindow(QMainWindow):
         self.connection_log = QPlainTextEdit()
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
+        self.get_log_button = QPushButton("Get client log")
+        self.get_log_button.setToolTip(
+            "Ask the most recently connected client to send its debug log"
+        )
+        self.get_log_button.clicked.connect(self._request_client_log)
+        log_tab = QWidget()
+        log_layout = QVBoxLayout(log_tab)
+        log_layout.addWidget(self.get_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        log_layout.addWidget(self.connection_log)
+        # While this window sits in Windows' modal move/size loop (title-bar
+        # drag — including one driven by an injected remote click), Qt stops
+        # running; the pump keeps sockets and timers serviced so a remote
+        # mouse-up can still arrive and end the drag instead of deadlocking.
+        self._modal_pump = ModalLoopPump()
         self.restart_button = QPushButton("Restart server")
         self.restart_button.setToolTip(
             "Relaunch this app (e.g. after updating the software). It can be "
@@ -93,7 +109,7 @@ class ServerWindow(QMainWindow):
             "Clients on LAN",
         )
         tabs.addTab(PerformanceTab(self.performance), "Performance")
-        tabs.addTab(self.connection_log, "Connection log")
+        tabs.addTab(log_tab, "Connection log")
         tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
         self.setCentralWidget(tabs)
 
@@ -111,11 +127,13 @@ class ServerWindow(QMainWindow):
             paired=paired,
             clipboard=self._clipboard,
             performance=self.performance,
+            log_provider=lambda: read_log_tail("server"),
             parent=self,
         )
         self.share_server.status.connect(self.log)
         self.share_server.clientCountChanged.connect(self._update_summary)
         self.share_server.peerEvent.connect(self._record_peer)
+        self.share_server.logReceived.connect(self._show_client_log)
         self._listening = self.share_server.listen(connect_port)
 
         self.responder: DiscoveryResponder | None = None
@@ -219,6 +237,17 @@ class ServerWindow(QMainWindow):
             return
         self.close()
         QApplication.quit()
+
+    def _request_client_log(self) -> None:
+        self.share_server.request_log()
+
+    def _show_client_log(self, client_name: str, text: str) -> None:
+        title = f'Log from client "{client_name}"' if client_name else "Log from client"
+        PeerLogDialog(title, text, self).show()
+
+    def nativeEvent(self, event_type, message):
+        self._modal_pump.handle_native_event(event_type, message)
+        return super().nativeEvent(event_type, message)
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:
         box = QMessageBox(

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import db, icon, logs, window_state
+from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import DISCOVERY_PORT, ServerInfo, discover_servers
@@ -120,7 +121,14 @@ class ClientWindow(QMainWindow):
         self.connection_log = QPlainTextEdit(self)
         self.connection_log.setReadOnly(True)
         self.connection_log.setMaximumBlockCount(1000)
-        tabs.addTab(self.connection_log, "Connection log")
+        self.get_log_button = QPushButton("Get server log")
+        self.get_log_button.setToolTip("Ask the connected server to send its debug log")
+        self.get_log_button.clicked.connect(self._request_server_log)
+        log_tab = QWidget()
+        log_layout = QVBoxLayout(log_tab)
+        log_layout.addWidget(self.get_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        log_layout.addWidget(self.connection_log)
+        tabs.addTab(log_tab, "Connection log")
         tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
@@ -195,6 +203,7 @@ class ClientWindow(QMainWindow):
             known_servers=self._known_servers,
             clipboard=self._clipboard,
             performance=self.performance,
+            log_provider=lambda: read_log_tail("client"),
             parent=self,
         )
         self._client = client
@@ -204,6 +213,7 @@ class ClientWindow(QMainWindow):
         client.denied.connect(self._on_denied)
         client.disconnected.connect(self._on_disconnected)
         client.frameReceived.connect(self._on_frame)
+        client.logReceived.connect(self._show_server_log)
         self.viewer.clear(f"Connecting to {server.name} …")
         self.statusBar().showMessage(f"Connecting to {server.name} ({server.host}:{server.port}) …")
         client.connect_to(server.host, server.port)
@@ -247,6 +257,20 @@ class ClientWindow(QMainWindow):
         if not self._denied:
             self.viewer.clear("Disconnected")
             self.statusBar().showMessage(f"Disconnected from {self._server_name}")
+
+    def _request_server_log(self) -> None:
+        if self._client is None:
+            self.log("Not connected — no server to request a log from")
+            return
+        self._client.request_log()
+
+    def _show_server_log(self, text: str) -> None:
+        title = (
+            f'Log from server "{self._server_name}"'
+            if self._server_name
+            else "Log from server"
+        )
+        PeerLogDialog(title, text, self).show()
 
     def _on_frame(self, image) -> None:
         self._frame_count += 1

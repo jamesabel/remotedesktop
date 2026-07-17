@@ -26,6 +26,29 @@ def make_share_server(credentials, tmp_path, *, approve=lambda *_: True):
     return server
 
 
+def test_get_server_log_button_needs_a_connection(qapp, tmp_path):
+    window = make_window(tmp_path)
+    try:
+        window.get_log_button.click()
+        assert "no server to request a log from" in window.connection_log.toPlainText()
+    finally:
+        window.close()
+
+
+def test_received_server_log_opens_a_viewer_dialog(qapp, tmp_path):
+    from remotedesktop.logs import PeerLogDialog
+
+    window = make_window(tmp_path)
+    try:
+        window._show_server_log("some log text")
+        dialog = window.findChild(PeerLogDialog)
+        assert dialog is not None
+        assert "Log from server" in dialog.windowTitle()
+        dialog.close()
+    finally:
+        window.close()
+
+
 def test_window_starts_disconnected(qapp, tmp_path):
     window = make_window(tmp_path)
     assert window.statusBar().currentMessage() == "Not connected"

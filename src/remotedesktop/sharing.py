@@ -78,6 +78,7 @@ class ShareServer(QObject):
     clientCountChanged = Signal(int)
     status = Signal(str)
     peerEvent = Signal(dict)  # {key, event, name, address, detail} for the inventory
+    logReceived = Signal(str, str)  # (client name, log text) answering request_log
 
     def __init__(
         self,
@@ -89,10 +90,12 @@ class ShareServer(QObject):
         injector: InputInjector | None = None,
         clipboard=None,
         performance: PerformanceMonitor | None = None,
+        log_provider: Callable[[], str] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._performance = performance
+        self._log_provider = log_provider
         self._approve_client = approve_client
         self._paired = paired if paired is not None else PairedClients(db.connect(default_db_path()))
         self._fps = fps
@@ -216,6 +219,21 @@ class ShareServer(QObject):
             if stream in self._streams and self._clipboard is not None:
                 self.status.emit(f"Clipboard update received from {_peer(stream.socket)}")
                 self._clipboard.apply(message)
+            return
+        if message.get("type") == "log_request":
+            # Same admission rule as input/clipboard: pre-auth peers get nothing.
+            if stream in self._streams:
+                self._send_log(stream)
+            return
+        if message.get("type") == "log":
+            if stream in self._streams:
+                text = str(message.get("text", ""))
+                name = self._stream_key.get(stream, ("", "", ""))[1]
+                self.status.emit(
+                    f'Received log from "{name or _peer(stream.socket)}" '
+                    f"({len(text) // 1024} KB)"
+                )
+                self.logReceived.emit(name, text)
             return
         if message.get("type") == "keyframe":
             # The client lost sync with the delta stream (e.g. a band failed
@@ -407,6 +425,27 @@ class ShareServer(QObject):
         for stream in self._streams:
             stream.send_json(message)
 
+    def request_log(self) -> None:
+        """Ask the most recently admitted client to send its debug log
+        (delivered via `logReceived`)."""
+        if not self._streams:
+            self.status.emit("No connected client to request a log from")
+            return
+        stream = self._streams[-1]
+        self.status.emit(f"Requesting the log of the client at {_peer(stream.socket)}")
+        stream.send_json({"type": "log_request"})
+
+    def _send_log(self, stream: MessageStream) -> None:
+        text = (
+            self._log_provider()
+            if self._log_provider is not None
+            else "(no log available on the server)"
+        )
+        self.status.emit(
+            f"Log requested by {_peer(stream.socket)} — sending {len(text) // 1024} KB"
+        )
+        stream.send_json({"type": "log", "text": text})
+
     def _drop(self, stream: MessageStream) -> None:
         # Detach from the monitor before the deferred delete below, so it
         # never samples a deleted stream (idempotent for never-admitted ones).
@@ -520,6 +559,7 @@ class ShareClient(QObject):
     disconnected = Signal()
     frameReceived = Signal(QImage)
     status = Signal(str)
+    logReceived = Signal(str)  # server log text answering request_log
 
     def __init__(
         self,
@@ -528,10 +568,12 @@ class ShareClient(QObject):
         known_servers: KnownServers | None = None,
         clipboard=None,
         performance: PerformanceMonitor | None = None,
+        log_provider: Callable[[], str] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._performance = performance
+        self._log_provider = log_provider
         if performance is not None:
             performance.connectionLost.connect(self._on_connection_lost)
         self._client_id, self._name = identity or load_client_identity(
@@ -588,6 +630,15 @@ class ShareClient(QObject):
         if self._socket.state() == QSslSocket.SocketState.ConnectedState:
             self.status.emit("Sending local clipboard to server")
             self._stream.send_json({"type": "clipboard", **payload})
+
+    def request_log(self) -> None:
+        """Ask the connected server to send its debug log (delivered via
+        `logReceived`)."""
+        if self._socket.state() != QSslSocket.SocketState.ConnectedState:
+            self.status.emit("Not connected — cannot request the server's log")
+            return
+        self.status.emit("Requesting the server's log")
+        self._stream.send_json({"type": "log_request"})
 
     def _on_ssl_errors(self, errors) -> None:
         # Self-signed server certificate is expected; identity is pinned instead.
@@ -688,6 +739,20 @@ class ShareClient(QObject):
             case "ping" | "pong":
                 if self._performance is not None:
                     self._performance.handle_message(self._stream, message)
+            case "log_request":
+                text = (
+                    self._log_provider()
+                    if self._log_provider is not None
+                    else "(no log available on the client)"
+                )
+                self.status.emit(
+                    f"Server requested this client's log — sending {len(text) // 1024} KB"
+                )
+                self._stream.send_json({"type": "log", "text": text})
+            case "log":
+                text = str(message.get("text", ""))
+                self.status.emit(f"Received the server's log ({len(text) // 1024} KB)")
+                self.logReceived.emit(text)
 
     def _on_frame(self, data: bytes) -> None:
         # Full frame — PNG keyframe or (legacy servers) JPEG; sniffed from
