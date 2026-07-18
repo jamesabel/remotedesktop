@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import __version__, db, icon, logs, tls, window_state
+from remotedesktop.about import AboutTab
 from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
@@ -55,14 +56,14 @@ class ViewersTable(QTableWidget):
     """
 
     _COLUMNS = [
-        "Name", "Address", "User", "Computer", "OS", "Send", "Receive",
+        "Name", "Address", "User", "Computer", "OS", "Version", "Send", "Receive",
         "RTT", "RTT mean", "RTT min", "RTT max", "RTT p99", "RTT jitter",
     ]
     # Metric cells change text every tick, so their columns get a constant
     # width (sized to the widest plausible value) instead of
     # ResizeToContents — otherwise the columns visibly jitter each second.
-    _RATE_COLUMNS = (5, 6)  # Send / Receive
-    _MS_COLUMNS = (7, 8, 9, 10, 11, 12)  # RTT latest + window statistics
+    _RATE_COLUMNS = (6, 7)  # Send / Receive
+    _MS_COLUMNS = (8, 9, 10, 11, 12, 13)  # RTT latest + window statistics
     _METRIC_COLUMNS = _RATE_COLUMNS + _MS_COLUMNS
 
     def __init__(self, share_server, performance: PerformanceMonitor, parent=None) -> None:
@@ -111,6 +112,7 @@ class ViewersTable(QTableWidget):
                 viewer["user"] or "—",
                 viewer["host"] or "—",
                 viewer["os"] or "—",
+                viewer["app_version"] or "—",
                 format_rate(send) if send is not None else "—",
                 format_rate(recv) if recv is not None else "—",
                 format_ms(rtt) if rtt is not None else "—",
@@ -205,6 +207,7 @@ class ServerWindow(QMainWindow):
         )
         tabs.addTab(log_tab, "Connection log")
         tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
+        tabs.addTab(AboutTab(), "About")
         self.setCentralWidget(tabs)
 
         if credentials is None:

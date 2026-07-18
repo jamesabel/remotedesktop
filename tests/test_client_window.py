@@ -83,6 +83,10 @@ def test_connect_view_and_disconnect_full_flow(qapp, credentials, tmp_path):
         pump(qapp, lambda: window.viewer.has_frame)
         assert window._connected
         assert "Viewing" in window.statusBar().currentMessage()
+        # The welcome carried the server's app version for display.
+        from remotedesktop import __version__
+
+        assert f"({__version__})" in window.statusBar().currentMessage()
         key = f"127.0.0.1:{server.port}"
         assert window.inventory._peers[key].state == "connected"
 

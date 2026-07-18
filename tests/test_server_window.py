@@ -247,11 +247,14 @@ def test_viewers_table_lists_connected_client_details(qapp, credentials, tmp_pat
             item = window.viewers_table.item(0, column)
             assert item is not None
             row.append(item.text())
-        name, address, user, host, os_info, send, recv, rtt = row[:8]
-        # The hello carried this machine's real login/host/OS details.
+        name, address, user, host, os_info, version, send, recv, rtt = row[:9]
+        # The hello carried this machine's real login/host/OS/version details.
         assert name and user != "—" and host != "—"
         assert "127.0.0.1" in address and "::ffff:" not in address
         assert os_info.startswith("Windows")
+        from remotedesktop import __version__
+
+        assert version == __version__
         # No monitor tick has necessarily run yet; metrics are dashes or values.
         assert send and recv and rtt
         client.close()
@@ -280,7 +283,10 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
 
     stream = FakeStream()
     monitor = PerformanceMonitor()
-    viewer = {"name": "n", "address": "a", "user": "u", "host": "h", "os": "o", "stream": stream}
+    viewer = {
+        "name": "n", "address": "a", "user": "u", "host": "h", "os": "o",
+        "app_version": "1.0", "stream": stream,
+    }
     table = ViewersTable(FakeShareServer([viewer]), monitor)
     widths = [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS]
     assert all(w > 0 for w in widths)
@@ -298,7 +304,7 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
     rtt_series.add(1234.5)
     table.refresh()
     assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
-    send_item = table.item(0, 5)
+    send_item = table.item(0, ViewersTable._RATE_COLUMNS[0])
     assert send_item is not None and send_item.text() == "250.0 MB/s"
 
 
