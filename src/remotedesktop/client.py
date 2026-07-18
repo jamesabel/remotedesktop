@@ -1,5 +1,5 @@
-"""Client GUI application: discovers servers on the LAN, connects to one,
-and shows its desktop in a viewer widget."""
+"""Client GUI application: discovers servers on the LAN, connects to one or
+more of them, and shows each server's desktop in its own viewer tab."""
 
 import logging
 import sqlite3
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTabBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -89,12 +90,30 @@ class DiscoveryPanel(QWidget):
         self.serverActivated.emit(item.data(Qt.ItemDataRole.UserRole))
 
 
+class ServerSession:
+    """One server connection: its ShareClient, the viewer tab that displays
+    it, and the per-connection state the window tracks for it. The session
+    (and its tab) outlives a disconnect, so the user can reconnect in place;
+    closing the tab ends the session."""
+
+    def __init__(self, key: str, name: str, client: ShareClient, viewer: ViewerWidget) -> None:
+        self.key = key  # "host:port", the KnownServers/inventory key
+        self.name = name
+        self.client = client
+        self.viewer = viewer
+        self.connected = False
+        self.denied = False
+        self.version_mismatch = False
+        self.frame_count = 0
+        # What the status bar shows while this session's tab is current.
+        self.status_text = ""
+
+
 class ClientWindow(QMainWindow):
     def __init__(
         self, *, connection: sqlite3.Connection | None = None, auto_scan: bool = True
     ) -> None:
         super().__init__()
-        self.setWindowTitle(f"Remote Desktop Client {__version__}")
         self.setWindowIcon(icon.app_icon("client"))
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
@@ -103,19 +122,23 @@ class ClientWindow(QMainWindow):
             window_seconds=float(load_performance_window_seconds(self._settings)),
             parent=self,
         )
-        self.viewer = ViewerWidget(self)
         self.inventory = ConnectionInventory(self._db, "client_peers", self)
-        tabs = QTabWidget()
-        tabs.addTab(self.viewer, "Remote Screen")
-        tabs.addTab(
+        # One tab per server connection (inserted at the front, closable),
+        # followed by the fixed tabs, which never get a close button.
+        self._sessions: list[ServerSession] = []
+        self._tabs = QTabWidget()
+        self._tabs.setTabsClosable(True)
+        self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
+        self._tabs.currentChanged.connect(lambda _index: self._refresh_status_bar())
+        self._tabs.addTab(
             InventoryTab(self.inventory, "Forget server", self._forget_server),
             "Servers on LAN",
         )
-        tabs.addTab(
+        self._tabs.addTab(
             PerformanceTab(self.performance, local="client", remote="server"),
             "Performance",
         )
-        self.setCentralWidget(tabs)
+        self.setCentralWidget(self._tabs)
 
         self.discovery_panel = DiscoveryPanel(self)
         servers_dock = QDockWidget("Servers", self)
@@ -132,25 +155,24 @@ class ClientWindow(QMainWindow):
         log_layout = QVBoxLayout(log_tab)
         log_layout.addWidget(self.get_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
         log_layout.addWidget(self.connection_log)
-        tabs.addTab(log_tab, "Connection log")
-        tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
-        tabs.addTab(AboutTab(), "About")
+        self._tabs.addTab(log_tab, "Connection log")
+        self._tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
+        self._tabs.addTab(AboutTab(), "About")
+        # Only session tabs are closable; strip the buttons the fixed tabs
+        # got from setTabsClosable (styles place them on either side).
+        bar = self._tabs.tabBar()
+        for index in range(self._tabs.count()):
+            for side in (QTabBar.ButtonPosition.LeftSide, QTabBar.ButtonPosition.RightSide):
+                bar.setTabButton(index, side, None)
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
         self.discovery_panel.serversFound.connect(self._record_discovered)
         self.discovery_panel.status.connect(self.log)
-        self.viewer.inputEvent.connect(self._on_input_event)
 
         self._clipboard = ClipboardSync(parent=self)
         self._known_servers = KnownServers(self._db)
         self._identity = load_client_identity(self._db)
-        self._client: ShareClient | None = None
-        self._connected = False
-        self._denied = False
-        self._version_mismatch = False
-        self._server_name = ""
-        self._server_key = ""
-        self._frame_count = 0
+        self._update_window_title()
         self.statusBar().showMessage("Not connected")
         window_state.restore_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
         self.log("Client started")
@@ -164,6 +186,40 @@ class ClientWindow(QMainWindow):
         _log.info(message)
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
+    def _update_window_title(self) -> None:
+        """Connected server names lead the title, so the taskbar (and a
+        minimized window) says who this client is viewing."""
+        names = [session.name for session in self._sessions if session.connected]
+        base = f"Remote Desktop Client {__version__}"
+        self.setWindowTitle(f"{', '.join(names)} — {base}" if names else base)
+
+    def _session_for_key(self, key: str) -> ServerSession | None:
+        for session in self._sessions:
+            if session.key == key:
+                return session
+        return None
+
+    def _session_for_viewer(self, widget) -> ServerSession | None:
+        for session in self._sessions:
+            if session.viewer is widget:
+                return session
+        return None
+
+    def _set_session_status(self, session: ServerSession, text: str) -> None:
+        session.status_text = text
+        if self._tabs.currentWidget() is session.viewer:
+            self.statusBar().showMessage(text)
+
+    def _refresh_status_bar(self) -> None:
+        session = self._session_for_viewer(self._tabs.currentWidget())
+        if session is not None:
+            self.statusBar().showMessage(session.status_text)
+            return
+        names = [s.name for s in self._sessions if s.connected]
+        self.statusBar().showMessage(
+            f"Connected to {', '.join(names)}" if names else "Not connected"
+        )
+
     def _forget_server(self, key: str) -> None:
         answer = QMessageBox.question(
             self,
@@ -174,8 +230,9 @@ class ClientWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        if self._connected and self._server_key == key and self._client is not None:
-            self._client.close()
+        session = self._session_for_key(key)
+        if session is not None:
+            self._close_session(session)
         self._known_servers.forget(key)
         self.inventory.record(key, "forgotten")
         self.log(f"Forgot server {key}")
@@ -183,28 +240,29 @@ class ClientWindow(QMainWindow):
     def _record_discovered(self, servers: list) -> None:
         for server in servers:
             key = f"{server.host}:{server.port}"
-            if self._connected and key == self._server_key:
-                continue  # don't downgrade the connected server to "discovered"
+            session = self._session_for_key(key)
+            if session is not None and session.connected:
+                continue  # don't downgrade a connected server to "discovered"
             self.inventory.record(
                 key, "discovered", name=server.name, address=key, detail=key
             )
 
     def _on_server_activated(self, server: ServerInfo) -> None:
-        if self._client is not None:
-            self.log("Closing previous connection")
-            self._client.close()
-            self._client.deleteLater()
-        self._server_name = server.name
-        self._server_key = f"{server.host}:{server.port}"
-        self._frame_count = 0
-        self._connected = False
-        self._denied = False
-        self._version_mismatch = False
-        self.inventory.record(
-            self._server_key, "attempt", name=server.name,
-            address=self._server_key, detail=self._server_key,
-        )
-        self.performance.reset()  # graphs show only the current connection
+        key = f"{server.host}:{server.port}"
+        session = self._session_for_key(key)
+        if session is not None and session.connected:
+            self._tabs.setCurrentWidget(session.viewer)
+            self.log(f"Already connected to {session.name} ({key})")
+            return
+        if session is None:
+            session = self._create_session(key, server.name)
+        else:
+            session.name = server.name
+            self._tabs.setTabText(self._sessions.index(session), session.name)
+        self._connect_session(session, server.host, server.port)
+
+    def _create_session(self, key: str, name: str) -> ServerSession:
+        viewer = ViewerWidget()
         client = ShareClient(
             identity=self._identity,
             known_servers=self._known_servers,
@@ -213,45 +271,92 @@ class ClientWindow(QMainWindow):
             log_provider=lambda: read_log_tail("client"),
             parent=self,
         )
-        self._client = client
-        client.status.connect(self.log)
-        client.connected.connect(self._on_connected)
-        client.approvalPending.connect(self._on_approval_pending)
-        client.denied.connect(self._on_denied)
-        client.disconnected.connect(self._on_disconnected)
-        client.frameReceived.connect(self._on_frame)
-        client.logReceived.connect(self._show_server_log)
-        self.viewer.clear(f"Connecting to {server.name} …")
-        self.statusBar().showMessage(f"Connecting to {server.name} ({server.host}:{server.port}) …")
-        client.connect_to(server.host, server.port)
+        session = ServerSession(key, name, client, viewer)
+        viewer.inputEvent.connect(lambda event, s=session: self._on_input_event(s, event))
+        client.status.connect(lambda message, s=session: self.log(f"[{s.name}] {message}"))
+        client.connected.connect(lambda server_name, s=session: self._on_connected(s, server_name))
+        client.approvalPending.connect(lambda s=session: self._on_approval_pending(s))
+        client.denied.connect(lambda reason, s=session: self._on_denied(s, reason))
+        client.disconnected.connect(lambda s=session: self._on_disconnected(s))
+        client.frameReceived.connect(lambda image, s=session: self._on_frame(s, image))
+        client.logReceived.connect(lambda text, s=session: self._show_server_log(s.name, text))
+        self._sessions.append(session)
+        self._tabs.insertTab(len(self._sessions) - 1, viewer, session.name)
+        return session
 
-    def _on_approval_pending(self) -> None:
-        self.viewer.clear(
-            f"Waiting for approval — someone at {self._server_name} "
+    def _connect_session(self, session: ServerSession, host: str, port: int) -> None:
+        session.frame_count = 0
+        session.connected = False
+        session.denied = False
+        session.version_mismatch = False
+        self.inventory.record(
+            session.key, "attempt", name=session.name,
+            address=session.key, detail=session.key,
+        )
+        # Graphs show only the current connection(s): clear them for a fresh
+        # start, but never while another session's stream is being sampled.
+        if not any(s.connected for s in self._sessions if s is not session):
+            self.performance.reset()
+        session.viewer.clear(f"Connecting to {session.name} …")
+        self._tabs.setCurrentWidget(session.viewer)
+        self._set_session_status(
+            session, f"Connecting to {session.name} ({session.key}) …"
+        )
+        session.client.connect_to(host, port)
+
+    def _close_session(self, session: ServerSession) -> None:
+        """Disconnect the session and remove its tab (tab close / forget)."""
+        session.client.close()  # a synchronous disconnect signal may fire here
+        index = self._sessions.index(session)
+        self._sessions.pop(index)
+        self._tabs.removeTab(index)
+        if session.connected and not session.denied:
+            self.inventory.record(session.key, "disconnected", name=session.name)
+        session.connected = False
+        session.client.deleteLater()
+        session.viewer.deleteLater()
+        self.log(f"Closed connection to {session.name} ({session.key})")
+        self._update_window_title()
+        self._refresh_status_bar()
+
+    def _on_tab_close_requested(self, index: int) -> None:
+        if index < len(self._sessions):  # fixed tabs carry no close button
+            self._close_session(self._sessions[index])
+
+    def _on_approval_pending(self, session: ServerSession) -> None:
+        if session not in self._sessions:
+            return
+        session.viewer.clear(
+            f"Waiting for approval — someone at {session.name} "
             "must allow this connection"
         )
-        self.statusBar().showMessage(
-            f"Waiting for the user on {self._server_name} to approve this computer …"
+        self._set_session_status(
+            session,
+            f"Waiting for the user on {session.name} to approve this computer …",
         )
 
-    def _server_label(self) -> str:
+    def _server_label(self, session: ServerSession) -> str:
         """The server's name with its app version when it reported one,
         e.g. 'DEN-PC (0.19.0)' — flagged when its major version differs."""
-        version = self._client.server_app_version if self._client is not None else ""
+        version = session.client.server_app_version
         if not version:
-            return self._server_name
-        marker = " ⚠ VERSION MISMATCH" if self._version_mismatch else ""
-        return f"{self._server_name} ({version}{marker})"
+            return session.name
+        marker = " ⚠ VERSION MISMATCH" if session.version_mismatch else ""
+        return f"{session.name} ({version}{marker})"
 
-    def _on_connected(self, server_name: str) -> None:
-        self._server_name = server_name or self._server_name
-        self._connected = True
+    def _on_connected(self, session: ServerSession, server_name: str) -> None:
+        if session not in self._sessions:
+            return
+        session.name = server_name or session.name
+        self._tabs.setTabText(self._sessions.index(session), session.name)
+        session.connected = True
         # Semver policy: matching majors are the compatibility contract. A
         # mismatch warns loudly (log, dialog, status bar) but never blocks —
         # the user may still try, with no guarantees.
-        server_version = self._client.server_app_version if self._client is not None else ""
-        warning = compat.mismatch_warning(__version__, server_version, "server")
-        self._version_mismatch = warning is not None
+        warning = compat.mismatch_warning(
+            __version__, session.client.server_app_version, "server"
+        )
+        session.version_mismatch = warning is not None
         if warning:
             self.log(warning)
             box = QMessageBox(
@@ -263,60 +368,72 @@ class ClientWindow(QMainWindow):
             )
             box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             box.show()  # non-modal: streaming continues behind it
-        self.inventory.record(self._server_key, "connected", name=self._server_name)
-        self.viewer.setFocus()
-        self.statusBar().showMessage(
-            f"Connected to {self._server_label()} — waiting for first frame "
-            "(click the view to control it)"
+        self.inventory.record(session.key, "connected", name=session.name)
+        session.viewer.setFocus()
+        self._set_session_status(
+            session,
+            f"Connected to {self._server_label(session)} — waiting for first frame "
+            "(click the view to control it)",
         )
+        self._update_window_title()
 
-    def _on_input_event(self, event: dict) -> None:
-        if self._connected and self._client is not None:
-            self._client.send_input(event)
+    def _on_input_event(self, session: ServerSession, event: dict) -> None:
+        if session.connected:
+            session.client.send_input(event)
 
-    def _on_denied(self, reason: str) -> None:
-        self._connected = False
-        self._denied = True
-        self.inventory.record(self._server_key, "denied", name=self._server_name)
-        self.viewer.clear(f"Connection denied: {reason}")
-        self.statusBar().showMessage(f"Denied by {self._server_name}: {reason}")
+    def _on_denied(self, session: ServerSession, reason: str) -> None:
+        if session not in self._sessions:
+            return
+        session.connected = False
+        session.denied = True
+        self.inventory.record(session.key, "denied", name=session.name)
+        session.viewer.clear(f"Connection denied: {reason}")
+        self._set_session_status(session, f"Denied by {session.name}: {reason}")
+        self._update_window_title()
 
-    def _on_disconnected(self) -> None:
-        self._connected = False
+    def _on_disconnected(self, session: ServerSession) -> None:
+        if session not in self._sessions:
+            return
+        session.connected = False
         # After a denial, keep "denied" as the peer's state in the inventory
         # rather than overwriting it with the trailing "disconnected".
-        if self._server_key and not self._denied:
-            self.inventory.record(self._server_key, "disconnected", name=self._server_name)
-        if not self._denied:
-            self.viewer.clear("Disconnected")
-            self.statusBar().showMessage(f"Disconnected from {self._server_name}")
+        if not session.denied:
+            self.inventory.record(session.key, "disconnected", name=session.name)
+            session.viewer.clear("Disconnected")
+            self._set_session_status(session, f"Disconnected from {session.name}")
+        self._update_window_title()
 
     def _request_server_log(self) -> None:
-        if self._client is None:
+        session = self._session_for_viewer(self._tabs.currentWidget())
+        if session is None:
+            connected = [s for s in self._sessions if s.connected]
+            session = connected[-1] if connected else None
+        if session is None:
             self.log("Not connected — no server to request a log from")
             return
-        self._client.request_log()
+        session.client.request_log()
 
-    def _show_server_log(self, text: str) -> None:
+    def _show_server_log(self, server_name: str, text: str) -> None:
         title = (
-            f'Log from server "{self._server_name}"'
-            if self._server_name
-            else "Log from server"
+            f'Log from server "{server_name}"' if server_name else "Log from server"
         )
         PeerLogDialog(title, text, self).show()
 
-    def _on_frame(self, image) -> None:
-        self._frame_count += 1
-        self.viewer.show_frame(image)
-        self.statusBar().showMessage(
-            f"Viewing {self._server_label()} — {image.width()}x{image.height()} — "
-            f"{self._frame_count} frames received"
+    def _on_frame(self, session: ServerSession, image) -> None:
+        if session not in self._sessions:
+            return
+        session.frame_count += 1
+        session.viewer.show_frame(image)
+        self._set_session_status(
+            session,
+            f"Viewing {self._server_label(session)} — {image.width()}x{image.height()} — "
+            f"{session.frame_count} frames received",
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         window_state.save_geometry(self, self._settings, window_state.CLIENT_GEOMETRY_KEY)
-        if self._client is not None:
-            self._client.close()
+        for session in self._sessions:
+            session.client.close()
         super().closeEvent(event)
 
 

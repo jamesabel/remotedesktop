@@ -24,9 +24,11 @@ Microsoft accounts, no cloud: just two apps and your LAN.
 ![Client demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/client-demo.gif)
 
 The client discovers the server on the LAN, connects, and streams its
-desktop live in the *Remote Screen* tab — click into the view and your mouse
-and keyboard control the remote machine. The *Performance* tab graphs
-bandwidth and round-trip time with live statistics.
+desktop live in a tab named after that computer — click into the view and
+your mouse and keyboard control the remote machine. Connect to several
+servers at once and each gets its own tab; the window title lists every
+connected computer. The *Performance* tab graphs bandwidth and round-trip
+time with live statistics.
 
 ### Server
 
@@ -39,6 +41,7 @@ time with mean/min/max/p99/jitter over the recent window).
 ## Features
 
 - 🔍 **Autodiscovery** — servers announce themselves over UDP; the client lists every server on the LAN, no addresses to type.
+- 🗂️ **Multiple servers at once** — one client can view and control several servers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other.
@@ -91,6 +94,60 @@ strict certificate checking. Unapproved clients are limited to small
 handshake messages until the server user admits them; access can be revoked
 at any time from the server's *Clients on LAN* tab. There is no dependency
 on Windows RDP or any Microsoft-based authentication.
+
+## How it works
+
+All of this is pure Python — the GUIs are PySide6 (Qt), and the two places
+that need to talk to Windows directly (screen capture and input injection)
+call the Win32/COM APIs through `ctypes`, so there are no native extensions
+to compile.
+
+**Screen capture.** The server grabs the desktop with the **DXGI desktop
+duplication API**, driven directly through `ctypes` COM calls. Desktop
+duplication is the mechanism Windows provides for exactly this job: the
+compositor hands over a GPU texture of the screen and tells you whether
+anything changed, so a changed 4K frame costs about 10 ms to read back and
+an idle screen costs essentially nothing. When duplication is unavailable
+or gets lost — the secure desktop (UAC/logon screen), an RDP session, a
+display-mode change — the server transparently falls back to Qt's
+`QScreen.grabWindow` (~96 ms per frame) and keeps retrying duplication in
+the background.
+
+**Screen transfer.** Frames are captured at up to 30 fps and compared with
+the previous capture in 64-row bands; only the bands that changed are
+encoded — losslessly, as PNG — and sent as a delta the client patches onto
+its last frame. An unchanged screen sends nothing at all. Full PNG
+keyframes go to clients that just connected, fell behind (a client whose
+socket backlog grows gets frames dropped, then a fresh keyframe once it
+catches up), or asked for one because a delta failed to apply — so a
+desynced stream heals itself. The frame always travels at the server's
+full resolution; scaling to the viewer window happens on the client.
+
+**Input injection.** The client's viewer widget captures your mouse and
+keyboard events, maps mouse positions to coordinates normalized 0..1 over
+the displayed frame (so window size and letterboxing don't matter), and
+sends them as small JSON messages. The server injects them with the Win32
+**`SendInput`** API: normalized coordinates map onto SendInput's 0..65535
+absolute coordinate space over the primary monitor, and keystrokes carry
+the client's native virtual-key codes, which are injected as-is — both
+ends are Windows, so no key translation is needed. The server only injects
+input from clients that have passed the approval handshake, and anything
+still held down (a dragged button, a modifier key) is released
+automatically if the viewer disconnects or loses focus.
+
+**Clipboard.** Both sides watch their local clipboard via Qt and forward
+copies (text, or images as PNG) over the same connection. Echo loops are
+prevented by content signature — an image is hashed by its canonical
+pixels, so a PNG that makes a round trip through the OS clipboard and
+comes back re-encoded is still recognized and not sent again.
+
+**Transport.** Each client talks to the server over a single TCP
+connection: TLS via the Windows schannel backend with a self-signed
+certificate the server generates and keeps, then simple length-prefixed
+messages on top — JSON for control (hello/welcome, input, clipboard,
+ping/pong for the round-trip-time graphs, log exchange) and binary
+payloads for frames and deltas. Discovery is a UDP broadcast probe that
+every server answers with its name and port (see below).
 
 ## Versioning
 

@@ -15,10 +15,10 @@ def test_version() -> None:
     assert remotedesktop.__version__
 
 
-def test_client_window_hosts_viewer(qapp) -> None:
+def test_client_window_hosts_discovery_panel(qapp) -> None:
     window = ClientWindow(auto_scan=False)
-    assert isinstance(window.viewer, ViewerWidget)
     assert isinstance(window.discovery_panel, DiscoveryPanel)
+    assert window._sessions == []  # a viewer tab appears per server connection
 
 
 def test_discovery_panel_lists_servers(qapp) -> None:
