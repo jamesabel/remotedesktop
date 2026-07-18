@@ -19,9 +19,6 @@ Microsoft accounts, no cloud: just two apps and your LAN.
 
 ## See it in action
 
-*Both recordings show a scripted demo session with a synthetic desktop —
-no real screen content.*
-
 ### Client
 
 ![Client demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/client-demo.gif)
