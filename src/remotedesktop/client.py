@@ -13,7 +13,6 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -82,11 +81,11 @@ class DiscoveryPanel(QWidget):
         self.connect_button = QPushButton("Connect")
         self.connect_button.setEnabled(False)  # needs a selection
         self.server_list = _ServerList()
-        buttons = QHBoxLayout()
-        buttons.addWidget(self._refresh_button)
-        buttons.addWidget(self.connect_button)
+        # Buttons stacked, not side by side: the dock stays narrow, leaving
+        # the width to the remote screen.
         layout = QVBoxLayout(self)
-        layout.addLayout(buttons)
+        layout.addWidget(self._refresh_button)
+        layout.addWidget(self.connect_button)
         layout.addWidget(self.server_list)
         self._refresh_button.clicked.connect(self.refresh)
         self.connect_button.clicked.connect(self._on_connect_clicked)
@@ -131,10 +130,13 @@ class DiscoveryPanel(QWidget):
         selected = self.selected_server()
         self.server_list.clear()
         for server in servers:
-            label = f"{server.name} ({server.host}:{server.port})"
+            # Two lines per server — name over address — so the list (and
+            # the dock) stays narrow; the LAN holds few servers, so the
+            # extra height is free.
+            name_line = server.name
             if self._is_self is not None and self._is_self(server):
-                label += " (this computer)"
-            item = QListWidgetItem(label)
+                name_line += " (this computer)"
+            item = QListWidgetItem(f"{name_line}\n{server.host}:{server.port}")
             item.setData(Qt.ItemDataRole.UserRole, server)
             self.server_list.addItem(item)
             if (

@@ -412,8 +412,8 @@ def test_own_server_is_labeled_in_discovery_results(qapp, credentials, tmp_path)
         )
         first = window.discovery_panel.server_list.item(0)
         second = window.discovery_panel.server_list.item(1)
-        assert first is not None and first.text().endswith("(this computer)")
-        assert second is not None and not second.text().endswith("(this computer)")
+        assert first is not None and "(this computer)" in first.text()
+        assert second is not None and "(this computer)" not in second.text()
     finally:
         window.close()
 
