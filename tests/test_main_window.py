@@ -87,9 +87,14 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         assert "Remote Desktop started" in window.connection_log.toPlainText()
         tabs = window.centralWidget()
         labels = [tabs.tabText(i) for i in range(tabs.count())]
-        for expected in ("Servers on LAN", "Sharing", "Clients on LAN", "Performance",
-                         "Connection log", "Preferences", "About"):
+        for expected in ("Server", "Performance", "Connection log", "Preferences", "About"):
             assert expected in labels
+        # The Server tab groups the sharing opt-in and both peer inventories.
+        from PySide6.QtWidgets import QGroupBox
+
+        server_tab = tabs.widget(labels.index("Server"))
+        groups = [g.title() for g in server_tab.findChildren(QGroupBox)]
+        assert groups == ["Sharing this computer", "Servers on LAN", "Clients on LAN"]
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
         # Idle: neither role schedules periodic work.

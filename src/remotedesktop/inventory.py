@@ -185,13 +185,20 @@ class InventoryTab(QWidget):
         container = self._table.cellWidget(row, len(self._COLUMNS))
         return container.findChild(QPushButton) if container is not None else None
 
-    def _make_row_button(self, key: str) -> QWidget:
+    def _on_row_action(self, button: QPushButton) -> None:
+        key = button.property("peer_key")
+        if key and self._action_callback is not None:
+            self._action_callback(key)
+
+    def _make_row_button(self) -> QWidget:
         # The trailing column is stretched; wrap the button in a left-aligned
         # container so it keeps its natural size instead of filling the cell.
+        # The peer key lives in a dynamic property so refresh() can re-point
+        # an existing button instead of recreating it — replaced cell widgets
+        # are only deleted when the event loop runs, so churning them leaves
+        # ghost buttons visible until then.
         button = QPushButton(self._action_label)
-        assert self._action_callback is not None
-        callback = self._action_callback
-        button.clicked.connect(lambda _checked=False, k=key: callback(k))
+        button.clicked.connect(lambda _checked=False, b=button: self._on_row_action(b))
         container = QWidget()
         box = QHBoxLayout(container)
         box.setContentsMargins(4, 1, 4, 1)
@@ -218,6 +225,11 @@ class InventoryTab(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, peer.key)
                 self._table.setItem(row, column, item)
             if self._action_label and self._action_callback is not None:
-                self._table.setCellWidget(
-                    row, len(self._COLUMNS), self._make_row_button(peer.key)
-                )
+                button = self._row_button(row)
+                if button is None:
+                    self._table.setCellWidget(
+                        row, len(self._COLUMNS), self._make_row_button()
+                    )
+                    button = self._row_button(row)
+                assert button is not None
+                button.setProperty("peer_key", peer.key)

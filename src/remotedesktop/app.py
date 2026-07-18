@@ -3,10 +3,11 @@ one — both roles in a single window.
 
 Viewing: the Servers dock discovers servers on the LAN; each connection is a
 `ServerSession` shown in its own closable tab (`remotedesktop.client`).
-Sharing: the "Sharing" tab (`remotedesktop.server.SharingTab`) opts this
-instance in to being a server. While sharing is enabled, closing the window
-hides to the system tray and sharing continues; quitting is in the tray
-menu. Only one instance runs per user session (`single_instance`)."""
+Sharing: the "Server" tab groups everything server-related — the sharing
+opt-in (`remotedesktop.server.SharingTab`) and both peer inventories. While
+sharing is enabled, closing the window hides to the system tray and sharing
+continues; quitting is in the tray menu. Only one instance runs per user
+session (`single_instance`)."""
 
 import logging
 import sqlite3
@@ -19,6 +20,7 @@ from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
+    QGroupBox,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -112,15 +114,24 @@ class MainWindow(QMainWindow):
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.currentChanged.connect(lambda _index: self._refresh_status_bar())
-        self._tabs.addTab(
-            InventoryTab(self.client_inventory, "Forget", self._forget_server),
-            "Servers on LAN",
+        # One "Server" tab holds everything server-related: the sharing
+        # opt-in with its viewers, plus both peer inventories.
+        server_tab = QWidget()
+        server_layout = QVBoxLayout(server_tab)
+        sharing_group = QGroupBox("Sharing this computer")
+        QVBoxLayout(sharing_group).addWidget(self.sharing_tab)
+        servers_group = QGroupBox("Servers on LAN")
+        QVBoxLayout(servers_group).addWidget(
+            InventoryTab(self.client_inventory, "Forget", self._forget_server)
         )
-        self._tabs.addTab(self.sharing_tab, "Sharing")
-        self._tabs.addTab(
-            InventoryTab(self.server_inventory, "Revoke", self._revoke_client),
-            "Clients on LAN",
+        clients_group = QGroupBox("Clients on LAN")
+        QVBoxLayout(clients_group).addWidget(
+            InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
         )
+        server_layout.addWidget(sharing_group, stretch=2)
+        server_layout.addWidget(servers_group, stretch=1)
+        server_layout.addWidget(clients_group, stretch=1)
+        self._tabs.addTab(server_tab, "Server")
         self.performance_pages = QTabWidget()
         self.performance_pages.addTab(
             PerformanceTab(self.client_performance, local="client", remote="server"),
