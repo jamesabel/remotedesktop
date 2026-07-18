@@ -308,6 +308,44 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
     assert send_item is not None and send_item.text() == "250.0 MB/s"
 
 
+def test_viewers_table_flags_a_major_version_mismatch(qapp):
+    from PySide6.QtCore import QObject, Signal
+
+    from remotedesktop import __version__
+    from remotedesktop.performance import PerformanceMonitor
+    from remotedesktop.server import ViewersTable
+    from test_performance import FakeStream
+
+    class FakeShareServer(QObject):
+        clientCountChanged = Signal(int)
+
+        def __init__(self, viewers):
+            super().__init__()
+            self._viewers = viewers
+
+        def viewers(self):
+            return self._viewers
+
+    def viewer(version, stream):
+        return {
+            "name": "n", "address": "a", "user": "u", "host": "h", "os": "o",
+            "app_version": version, "stream": stream,
+        }
+
+    same, other, old = FakeStream(), FakeStream(), FakeStream()
+    table = ViewersTable(
+        FakeShareServer([viewer(__version__, same), viewer("99.0.0", other), viewer("", old)]),
+        PerformanceMonitor(),
+    )
+    column = ViewersTable._COLUMNS.index("Version")
+    cells = []
+    for row in range(3):
+        item = table.item(row, column)
+        assert item is not None
+        cells.append(item.text())
+    assert cells == [__version__, "99.0.0 ⚠", "—"]
+
+
 def test_refused_approval_denies_client(qapp, credentials, tmp_path, monkeypatch):
     stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.No)
     window = make_window(credentials, tmp_path)

@@ -92,6 +92,16 @@ handshake messages until the server user admits them; access can be revoked
 at any time from the server's *Clients on LAN* tab. There is no dependency
 on Windows RDP or any Microsoft-based authentication.
 
+## Versioning
+
+The apps follow [semantic versioning](https://semver.org): the **major**
+version is the client/server compatibility contract (same major →
+guaranteed to interoperate), **minor** versions add backward-compatible
+features, **patch** versions fix bugs. On every connection each side
+compares its major version with the peer's; a mismatch shows a strong
+warning in both GUIs — connecting is still allowed, but the experience is
+not guaranteed. Keep both computers on the same version for best results.
+
 ## Requirements
 
 - Windows

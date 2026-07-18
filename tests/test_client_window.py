@@ -186,6 +186,31 @@ def test_forget_server_disconnects_and_forgets(qapp, credentials, tmp_path, monk
         server.close()
 
 
+def test_version_mismatch_warns_but_still_connects(qapp, credentials, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "show", lambda self: shown.append(self.windowTitle()))
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window.viewer.has_frame)
+        assert not window._version_mismatch  # same build on both ends
+        assert shown == []
+        # Re-run the connected handler as if the server had reported a
+        # different major version.
+        assert window._client is not None
+        window._client.server_app_version = "99.0.0"
+        window._on_connected("box")
+        assert window._version_mismatch
+        assert shown == ["Version mismatch"]  # strong, but non-modal
+        assert "WARNING: version mismatch" in window.connection_log.toPlainText()
+        assert "99.0.0 ⚠ VERSION MISMATCH" in window.statusBar().currentMessage()
+        assert window._connected  # the user may still use the connection
+    finally:
+        window.close()
+        server.close()
+
+
 def test_discovery_panel_lists_scan_results(qapp, monkeypatch):
     info = ServerInfo(name="box", host="10.0.0.7", port=1234)
     monkeypatch.setattr(client_module, "discover_servers", lambda: [info])

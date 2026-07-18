@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import __version__, db, icon, logs, tls, window_state
+from remotedesktop import __version__, compat, db, icon, logs, tls, window_state
 from remotedesktop.about import AboutTab
 from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
@@ -99,6 +99,16 @@ class ViewersTable(QTableWidget):
         super().showEvent(event)
         self.refresh()  # catch up on metrics accrued while hidden
 
+    @staticmethod
+    def _version_cell(version: str) -> str:
+        """The viewer's version, flagged when its semver major differs from
+        ours (compatibility is only guaranteed within a major)."""
+        if not version:
+            return "—"
+        if compat.mismatch_warning(__version__, version, "client") is not None:
+            return f"{version} ⚠"
+        return version
+
     def refresh(self) -> None:
         viewers = self._share_server.viewers()
         self.setRowCount(len(viewers))
@@ -112,7 +122,7 @@ class ViewersTable(QTableWidget):
                 viewer["user"] or "—",
                 viewer["host"] or "—",
                 viewer["os"] or "—",
-                viewer["app_version"] or "—",
+                self._version_cell(viewer["app_version"]),
                 format_rate(send) if send is not None else "—",
                 format_rate(recv) if recv is not None else "—",
                 format_ms(rtt) if rtt is not None else "—",

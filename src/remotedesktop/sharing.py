@@ -34,7 +34,7 @@ from PySide6.QtNetwork import (
     QTcpSocket,
 )
 
-from remotedesktop import __version__
+from remotedesktop import __version__, compat
 from remotedesktop.config import (
     KnownServers,
     PairedClients,
@@ -354,6 +354,14 @@ class ShareServer(QObject):
             "os": str(message.get("os", "")),
             "app_version": str(message.get("app_version", "")),
         }
+        # Semver policy: majors must match for guaranteed interoperability.
+        # A mismatch is loudly reported but never blocks the connection.
+        warning = compat.mismatch_warning(
+            __version__, self._viewer_info[stream]["app_version"], "client"
+        )
+        if warning:
+            self.status.emit(warning)
+            _log.warning("%s", warning)
         if isinstance(client_id, str) and client_id:
             self._stream_key[stream] = (client_id, client_name, peer)
             self._emit_peer(stream, "attempt")
