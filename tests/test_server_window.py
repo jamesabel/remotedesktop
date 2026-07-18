@@ -230,6 +230,43 @@ def test_viewers_table_lists_connected_client_details(qapp, credentials, tmp_pat
         window.close()
 
 
+def test_viewers_table_metric_columns_keep_constant_width(qapp):
+    from PySide6.QtCore import QObject, Signal
+
+    from remotedesktop.performance import PerformanceMonitor
+    from remotedesktop.server import ViewersTable
+    from test_performance import FakeStream
+
+    class FakeShareServer(QObject):
+        clientCountChanged = Signal(int)
+
+        def __init__(self, viewers):
+            super().__init__()
+            self._viewers = viewers
+
+        def viewers(self):
+            return self._viewers
+
+    stream = FakeStream()
+    monitor = PerformanceMonitor()
+    viewer = {"name": "n", "address": "a", "user": "u", "host": "h", "os": "o", "stream": stream}
+    table = ViewersTable(FakeShareServer([viewer]), monitor)
+    widths = [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS]
+    assert all(w > 0 for w in widths)
+    # Values swinging from B/s to hundreds of MB/s must not move the columns.
+    monitor._stream_send_bps[stream] = 312.0
+    monitor._stream_recv_bps[stream] = 5.0
+    monitor._stream_rtt[stream] = 2.1
+    table.refresh()
+    assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
+    monitor._stream_send_bps[stream] = 250.0 * 1024 * 1024
+    monitor._stream_rtt[stream] = 1234.5
+    table.refresh()
+    assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
+    send_item = table.item(0, 5)
+    assert send_item is not None and send_item.text() == "250.0 MB/s"
+
+
 def test_refused_approval_denies_client(qapp, credentials, tmp_path, monkeypatch):
     stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.No)
     window = make_window(credentials, tmp_path)

@@ -55,6 +55,10 @@ class ViewersTable(QTableWidget):
     """
 
     _COLUMNS = ["Name", "Address", "User", "Computer", "OS", "Send", "Receive", "Round trip"]
+    # Send / Receive / Round trip: their text changes every tick, so they
+    # get a constant width (sized to the widest plausible value) instead of
+    # ResizeToContents — otherwise the columns visibly jitter each second.
+    _METRIC_COLUMNS = (5, 6, 7)
 
     def __init__(self, share_server, performance: PerformanceMonitor, parent=None) -> None:
         # One extra headerless column takes the stretch so the data columns
@@ -64,8 +68,13 @@ class ViewersTable(QTableWidget):
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.verticalHeader().setVisible(False)
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.horizontalHeader().setStretchLastSection(True)
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        metric_width = self.fontMetrics().horizontalAdvance("9999.9 MB/s") + 24
+        for column in self._METRIC_COLUMNS:
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+            self.setColumnWidth(column, metric_width)
         self._share_server = share_server
         self._performance = performance
         share_server.clientCountChanged.connect(self._on_count_changed)
@@ -100,7 +109,14 @@ class ViewersTable(QTableWidget):
                 format_ms(rtt) if rtt is not None else "—",
             ]
             for column, value in enumerate(values):
-                self.setItem(row, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if column in self._METRIC_COLUMNS:
+                    # Right-aligned numbers change magnitude without the
+                    # digits appearing to wander.
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                self.setItem(row, column, item)
 
 
 class ServerWindow(QMainWindow):
