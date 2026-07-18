@@ -26,6 +26,7 @@ remotedesktop-server = "remotedesktop.server:main"
 
 [dependency-groups]
 dev = [
+    "pillow>=12.3.0",
     "pytest>=8",
     "pytest-cov>=7.1.0",
 ]
