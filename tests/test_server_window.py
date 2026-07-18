@@ -212,11 +212,12 @@ def test_viewers_table_lists_connected_client_details(qapp, credentials, tmp_pat
     try:
         pump(qapp, lambda: names)
         pump(qapp, lambda: window.viewers_table.rowCount() == 1)
-        row = [
-            window.viewers_table.item(0, column).text()
-            for column in range(len(window.viewers_table._COLUMNS))
-        ]
-        name, address, user, host, os_info, send, recv, rtt = row
+        row = []
+        for column in range(len(window.viewers_table._COLUMNS)):
+            item = window.viewers_table.item(0, column)
+            assert item is not None
+            row.append(item.text())
+        name, address, user, host, os_info, send, recv, rtt = row[:8]
         # The hello carried this machine's real login/host/OS details.
         assert name and user != "—" and host != "—"
         assert "127.0.0.1" in address and "::ffff:" not in address
@@ -254,13 +255,17 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
     widths = [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS]
     assert all(w > 0 for w in widths)
     # Values swinging from B/s to hundreds of MB/s must not move the columns.
+    from remotedesktop.performance import MetricSeries
+
+    rtt_series = MetricSeries(120.0)
+    rtt_series.add(2.1)
     monitor._stream_send_bps[stream] = 312.0
     monitor._stream_recv_bps[stream] = 5.0
-    monitor._stream_rtt[stream] = 2.1
+    monitor._stream_rtt[stream] = rtt_series
     table.refresh()
     assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
     monitor._stream_send_bps[stream] = 250.0 * 1024 * 1024
-    monitor._stream_rtt[stream] = 1234.5
+    rtt_series.add(1234.5)
     table.refresh()
     assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
     send_item = table.item(0, 5)

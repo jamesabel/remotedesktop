@@ -178,7 +178,27 @@ def test_per_stream_metrics_track_each_viewer(qapp):
     monitor.remove_stream(first)
     assert monitor.metrics_for(first) == {
         "send_bps": None, "recv_bps": None, "rtt_ms": None, "peer_rtt_ms": None,
+        "rtt_stats": None,
     }
+
+
+def test_per_stream_rtt_statistics_cover_the_window(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(clock=clock)
+    stream = FakeStream()
+    monitor.add_stream(stream)
+    for rtt_s in (0.010, 0.020, 0.090):
+        monitor._on_tick()
+        clock.advance(rtt_s)
+        monitor.handle_message(stream, {"type": "pong", "id": stream.sent[-1]["id"]})
+        clock.advance(1.0)
+    stats = monitor.metrics_for(stream)["rtt_stats"]
+    assert stats is not None
+    assert stats["count"] == 3
+    assert stats["min"] == pytest.approx(10.0)
+    assert stats["max"] == pytest.approx(90.0)
+    assert stats["mean"] == pytest.approx(40.0)
+    assert monitor.metrics_for(stream)["rtt_ms"] == pytest.approx(90.0)
 
 
 def test_stale_or_malformed_pongs_are_ignored(qapp):
