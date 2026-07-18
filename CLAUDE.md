@@ -19,8 +19,12 @@ LAN autodiscovery, screen sharing, keyboard/mouse forwarding, clipboard sync, an
 
 **Never push directly to `master`** — a repository ruleset rejects it. Every
 change goes through a pull request: branch → push → PR → CI green → merge.
-CI publishes the coverage badge to the unprotected `badges` branch (readme
-references it by raw URL), so no workflow ever needs to write to `master`.
+The ruleset also **requires the `ruff`, `ty`, and `test` checks to pass**
+(GitHub Actions, non-strict), so a merge with a red or missing check is
+rejected by GitHub; if a CI job is added or renamed, update the ruleset's
+required checks to match. CI publishes the coverage badge to the
+unprotected `badges` branch (readme references it by raw URL), so no
+workflow ever needs to write to `master`.
 
 **Releases are tagged automatically**: merging a version-bump PR (a change
 to `src/remotedesktop/__init__.py`, the only place the version lives)
