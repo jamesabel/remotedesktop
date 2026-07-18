@@ -16,6 +16,7 @@ GUIs can show a debug log.
 import hmac
 import logging
 import socket as socket_module
+import time
 from collections.abc import Callable
 from typing import cast
 
@@ -38,7 +39,7 @@ from remotedesktop.config import (
     load_client_identity,
 )
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
-from remotedesktop import frames
+from remotedesktop import dxgi, frames
 from remotedesktop.input_injection import InputInjector
 from remotedesktop.performance import PerformanceMonitor
 from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
@@ -129,6 +130,12 @@ class ShareServer(QObject):
         self._delta_capable: set[MessageStream] = set()
         self._needs_keyframe: set[MessageStream] = set()
         self._previous_frame: QImage | None = None
+        # DXGI desktop duplication (~10 ms per changed 4K frame, ~0 when the
+        # screen is idle, vs ~96 ms for grabWindow). Created lazily on the
+        # first capture; None with a retry deadline while unavailable or
+        # lost (secure desktop, display-mode change) — grabWindow fills in.
+        self._dxgi: dxgi.DesktopDuplication | None = None
+        self._dxgi_retry_at = 0.0
 
         cert, key = credentials if credentials is not None else tls.ephemeral_credentials()
         self._server = QSslServer(self)
@@ -178,6 +185,9 @@ class ShareServer(QObject):
         self._delta_capable.clear()
         self._needs_keyframe.clear()
         self._previous_frame = None
+        if self._dxgi is not None:
+            self._dxgi.close()
+            self._dxgi = None
         if had_clients:
             self.clientCountChanged.emit(0)
         if self._performance is not None:
@@ -490,12 +500,39 @@ class ShareServer(QObject):
 
     def _capture(self) -> QImage | None:
         """Grab the primary screen at full resolution (tests override this
-        to drive deterministic frame content)."""
+        to drive deterministic frame content).
+
+        DXGI desktop duplication when it works — returning the *same QImage
+        object* as last time when the screen is unchanged — otherwise
+        grabWindow."""
+        image = self._capture_dxgi()
+        if image is not None:
+            return image
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             return None
         image = screen.grabWindow(0).toImage()
         return None if image.isNull() else image
+
+    def _capture_dxgi(self) -> QImage | None:
+        now = time.monotonic()
+        if self._dxgi is None:
+            if now < self._dxgi_retry_at:
+                return None
+            self._dxgi = dxgi.DesktopDuplication.create()
+            if self._dxgi is None:
+                # Not available on this system/session; check again rarely.
+                self._dxgi_retry_at = now + 60.0
+                return None
+        image = self._dxgi.grab()
+        if image is None:
+            # Lost (secure desktop, display-mode change) or no frame yet;
+            # grabWindow covers the gap and we retry shortly.
+            self._dxgi.close()
+            self._dxgi = None
+            self._dxgi_retry_at = now + 2.0
+            _log.info("DXGI capture unavailable — using grabWindow until it recovers")
+        return image
 
     def _broadcast_frame(self) -> None:
         if not self._streams:
@@ -504,13 +541,18 @@ class ShareServer(QObject):
         if image is None:
             self.status.emit("Screen capture failed (null image)")
             return
-        # bands is None when there is no comparable previous capture (first
-        # frame, or the resolution changed): everyone gets a full frame.
-        bands = (
-            frames.changed_bands(self._previous_frame, image)
-            if self._previous_frame is not None
-            else None
-        )
+        if image is self._previous_frame:
+            # DXGI reported no change since the last tick: skip the diff.
+            bands: list[tuple[int, int]] | None = []
+        else:
+            # bands is None when there is no comparable previous capture
+            # (first frame, or the resolution changed): everyone gets a
+            # full frame.
+            bands = (
+                frames.changed_bands(self._previous_frame, image)
+                if self._previous_frame is not None
+                else None
+            )
         self._previous_frame = image
         # Encode each variant at most once per tick, shared by all takers.
         legacy_jpeg: bytes | None = None
