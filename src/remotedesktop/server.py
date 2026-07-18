@@ -17,11 +17,9 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QHeaderView,
     QLabel,
     QMessageBox,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -40,6 +38,21 @@ from remotedesktop.performance import PerformanceMonitor, format_ms, format_rate
 from remotedesktop.sharing import ShareServer
 
 _log = logging.getLogger("remotedesktop.server")
+
+# The three-state sharing mode, persisted as two settings keys (kept from
+# the two-checkbox era so existing installs migrate without ceremony).
+SHARING_MODE_OFF = "off"
+SHARING_MODE_VIEW = "view"  # viewers can watch only
+SHARING_MODE_CONTROL = "control"  # viewers can watch and control
+ALLOW_INPUT_KEY = "allow_remote_input"
+
+
+def load_sharing_mode(settings: Settings) -> str:
+    if settings.get("server_enabled") != "1":
+        return SHARING_MODE_OFF
+    if settings.get(ALLOW_INPUT_KEY, "1") != "0":
+        return SHARING_MODE_CONTROL
+    return SHARING_MODE_VIEW
 
 
 class ViewersTable(QTableWidget):
@@ -148,23 +161,21 @@ class ViewersTable(QTableWidget):
 
 
 class SharingTab(QWidget):
-    """Opt in to sharing this computer's screen, and manage the viewers.
+    """The sharing role's status: summary and connected-viewers table.
 
     Owns the ShareServer + DiscoveryResponder: both are created when sharing
     is enabled and torn down when it is disabled, so a viewing-only instance
-    binds no ports (and never creates TLS credentials). The window hosting
-    this tab wires `statusMessage` to its Connection log, `peerEvent` to the
-    server-side inventory, `sharingChanged` to its tray/title state, and
-    `restartRequested` to the app restart flow.
+    binds no ports (and never creates TLS credentials). The sharing mode
+    itself is a three-state choice (`set_mode`: off / view / control) driven
+    by the Preferences tab. The window hosting this tab wires
+    `statusMessage` to its Connection log, `peerEvent` to the server-side
+    inventory, and `sharingChanged` to its tray/title state.
     """
 
     statusMessage = Signal(str)
     peerEvent = Signal(dict)  # {key, event, name, address, detail} for the inventory
     sharingChanged = Signal(bool)  # emitted with `serving` after start/stop
     viewerCountChanged = Signal(int)  # 0 while not serving
-    restartRequested = Signal()
-
-    ALLOW_INPUT_KEY = "allow_remote_input"
 
     def __init__(
         self,
@@ -194,38 +205,16 @@ class SharingTab(QWidget):
         self._listening = False
         self._discoverable = False
 
-        self.share_checkbox = QCheckBox("Share this computer's screen on the LAN")
-        self.allow_input_checkbox = QCheckBox("Allow viewers to control this computer")
-        self.allow_input_checkbox.setChecked(
-            self._settings.get(self.ALLOW_INPUT_KEY, "1") != "0"
-        )
-        self.allow_input_checkbox.toggled.connect(self._on_allow_input_toggled)
         self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.viewers_table = ViewersTable(performance)
-        self.restart_button = QPushButton("Restart app")
-        self.restart_button.setToolTip(
-            "Relaunch this app (e.g. after updating the software). It can be "
-            "clicked from a remote desktop session, so an update doesn't "
-            "require visiting this computer."
-        )
-        self.restart_button.clicked.connect(self.restartRequested.emit)
         layout = QVBoxLayout(self)
-        layout.addWidget(self.share_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.allow_input_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._summary)
         layout.addWidget(self.viewers_table, stretch=1)
-        layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Restore the persisted opt-in state (checkbox only). The host window
-        # calls restore_sharing() once its signal wiring exists, so no
-        # startup status message is emitted into the void.
-        self.share_checkbox.setChecked(self._settings.get("server_enabled") == "1")
-        self.share_checkbox.toggled.connect(self._on_share_toggled)
         self._update_summary(0)
 
     def restore_sharing(self) -> None:
-        """Start sharing if the persisted opt-in is on (call after wiring)."""
-        if self.share_checkbox.isChecked() and self.share_server is None:
+        """Start sharing if the persisted mode is on (call after wiring)."""
+        if load_sharing_mode(self._settings) != SHARING_MODE_OFF and self.share_server is None:
             self.start_sharing()
 
     @property
@@ -237,22 +226,27 @@ class SharingTab(QWidget):
     def viewer_count(self) -> int:
         return self.share_server.client_count if self.share_server is not None else 0
 
-    def _on_allow_input_toggled(self, checked: bool) -> None:
-        self._settings.set(self.ALLOW_INPUT_KEY, "1" if checked else "0")
-        if self.share_server is not None:
-            self.share_server.set_input_allowed(checked)  # emits its status line
-        else:
-            self.statusMessage.emit(
-                "Viewers will be able to control this computer"
-                if checked
-                else "Viewers will be able to watch but not control this computer"
-            )
+    @property
+    def mode(self) -> str:
+        return load_sharing_mode(self._settings)
 
-    def _on_share_toggled(self, checked: bool) -> None:
-        if checked:
-            self.start_sharing()
-        else:
-            self.stop_sharing()
+    def set_mode(self, mode: str) -> None:
+        """Apply a sharing mode: SHARING_MODE_OFF / _VIEW / _CONTROL.
+
+        View ↔ control switches apply live without dropping viewers.
+        """
+        if mode == SHARING_MODE_OFF:
+            if self.share_server is not None:
+                self.stop_sharing()
+            else:
+                self._settings.set("server_enabled", "0")
+            return
+        allowed = mode == SHARING_MODE_CONTROL
+        self._settings.set(ALLOW_INPUT_KEY, "1" if allowed else "0")
+        if self.share_server is not None:
+            self.share_server.set_input_allowed(allowed)  # emits its status line
+            return
+        self.start_sharing()
 
     def start_sharing(self) -> None:
         if self.share_server is not None:
@@ -273,7 +267,7 @@ class SharingTab(QWidget):
             clipboard=self._clipboard,
             performance=self._performance,
             log_provider=lambda: read_log_tail("remotedesktop"),
-            input_allowed=self.allow_input_checkbox.isChecked(),
+            input_allowed=self._settings.get(ALLOW_INPUT_KEY, "1") != "0",
             parent=self,
         )
         server.status.connect(self.statusMessage)
@@ -331,7 +325,10 @@ class SharingTab(QWidget):
     def _update_summary(self, client_count: int) -> None:
         self.viewerCountChanged.emit(client_count if self.serving else 0)
         if self.share_server is None:
-            self._summary.setText("Not sharing this computer's screen")
+            self._summary.setText(
+                "Not sharing this computer's screen — turn on Screen sharing "
+                "in the Preferences tab to let others view this computer"
+            )
             return
         if not self._listening:
             self._summary.setText("Cannot share: the connection port is already in use")

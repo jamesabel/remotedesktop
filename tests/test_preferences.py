@@ -90,3 +90,17 @@ def test_clipboard_toggle_persists_and_applies_live(qapp, tmp_path):
     tab2 = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
     assert not tab2.clipboard_checkbox.isChecked()
     assert not load_clipboard_sync_enabled(settings)
+
+
+def test_sharing_mode_radios_reflect_persisted_state_and_emit(qapp, tmp_path):
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    settings.set("server_enabled", "1")
+    settings.set("allow_remote_input", "0")
+    tab = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+    assert tab.sharing_view_radio.isChecked()  # persisted: shared, view only
+    modes = []
+    tab.sharingModeChanged.connect(modes.append)
+    tab.sharing_control_radio.setChecked(True)
+    assert modes == ["control"]
+    tab.sharing_off_radio.setChecked(True)
+    assert modes == ["control", "off"]

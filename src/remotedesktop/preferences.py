@@ -10,11 +10,25 @@ shared `ClipboardSync` (the `clipboard=` opt-in collaborator pattern).
 from collections.abc import Sequence
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QFormLayout, QSpinBox, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFormLayout,
+    QPushButton,
+    QRadioButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from remotedesktop.autostart import Autostart
 from remotedesktop.config import Settings
 from remotedesktop.performance import PerformanceMonitor
+from remotedesktop.server import (
+    SHARING_MODE_CONTROL,
+    SHARING_MODE_OFF,
+    SHARING_MODE_VIEW,
+    load_sharing_mode,
+)
 
 PERFORMANCE_WINDOW_KEY = "performance_window_seconds"
 DEFAULT_PERFORMANCE_WINDOW_SECONDS = 120
@@ -36,6 +50,9 @@ def load_performance_window_seconds(settings: Settings) -> int:
 
 class PreferencesTab(QWidget):
     statusMessage = Signal(str)  # for the window's Connection log pane
+    # The three-state sharing mode ("off"/"view"/"control"); the window wires
+    # this to SharingTab.set_mode, which owns persistence and the lifecycle.
+    sharingModeChanged = Signal(str)
 
     def __init__(
         self,
@@ -68,10 +85,37 @@ class PreferencesTab(QWidget):
         self.clipboard_checkbox = QCheckBox("Sync clipboard with connected computers")
         self.clipboard_checkbox.setChecked(load_clipboard_sync_enabled(settings))
         self.clipboard_checkbox.toggled.connect(self._on_clipboard_toggled)
+        # The three-state sharing choice: off, view-only, or full control.
+        self.sharing_off_radio = QRadioButton("Not shared")
+        self.sharing_view_radio = QRadioButton("Shared — viewers can watch only")
+        self.sharing_control_radio = QRadioButton("Shared — viewers can watch and control")
+        self._mode_radios = {
+            SHARING_MODE_OFF: self.sharing_off_radio,
+            SHARING_MODE_VIEW: self.sharing_view_radio,
+            SHARING_MODE_CONTROL: self.sharing_control_radio,
+        }
+        self._mode_radios[load_sharing_mode(settings)].setChecked(True)
+        for mode, radio in self._mode_radios.items():
+            radio.toggled.connect(
+                lambda checked, m=mode: checked and self.sharingModeChanged.emit(m)
+            )
+        sharing_box = QWidget()
+        sharing_layout = QVBoxLayout(sharing_box)
+        sharing_layout.setContentsMargins(0, 0, 0, 0)
+        for radio in self._mode_radios.values():
+            sharing_layout.addWidget(radio)
+        self.restart_button = QPushButton("Restart app")
+        self.restart_button.setToolTip(
+            "Relaunch this app (e.g. after updating the software). It can be "
+            "clicked from a remote desktop session, so an update doesn't "
+            "require visiting this computer."
+        )
         layout = QFormLayout(self)
+        layout.addRow("Screen sharing", sharing_box)
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
         layout.addRow(self.autostart_checkbox)
+        layout.addRow(self.restart_button)
 
     def _on_history_changed(self, minutes: int) -> None:
         seconds = minutes * 60

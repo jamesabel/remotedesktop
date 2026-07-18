@@ -77,7 +77,7 @@ def test_tab_starts_not_sharing_by_default(qapp, credentials, tmp_path):
     try:
         assert not tab.serving
         assert tab.share_server is None and tab.responder is None
-        assert not tab.share_checkbox.isChecked()
+        assert tab.mode == "off"
         assert "Not sharing this computer's screen" in tab._summary.text()
         assert tab.viewers_table.rowCount() == 0
     finally:
@@ -87,7 +87,7 @@ def test_tab_starts_not_sharing_by_default(qapp, credentials, tmp_path):
 def test_enabling_sharing_listens_and_is_discoverable(qapp, credentials, tmp_path):
     tab = make_tab(credentials, tmp_path, enabled=False)
     try:
-        tab.share_checkbox.setChecked(True)
+        tab.set_mode("control")
         assert tab.serving
         assert tab._listening and tab._discoverable
         assert "Discoverable on this LAN" in tab._summary.text()
@@ -101,7 +101,7 @@ def test_enabling_sharing_listens_and_is_discoverable(qapp, credentials, tmp_pat
 def test_persisted_opt_in_resumes_sharing(qapp, credentials, tmp_path):
     tab = make_tab(credentials, tmp_path, enabled=True)
     try:
-        assert tab.share_checkbox.isChecked()
+        assert tab.mode == "control"
         assert tab.serving
     finally:
         tab.shutdown()
@@ -121,7 +121,7 @@ def test_disabling_sharing_disconnects_viewers_and_stops_discovery(
     try:
         pump(qapp, lambda: names)
 
-        tab.share_checkbox.setChecked(False)
+        tab.set_mode("off")
         pump(qapp, lambda: disconnected)
         assert not tab.serving
         assert tab.share_server is None and tab.responder is None
@@ -137,7 +137,7 @@ def test_disabling_sharing_disconnects_viewers_and_stops_discovery(
         assert token is not None  # the pairing survived the toggle
         prompts = []
         tab._ask_approval = lambda cid, name: prompts.append(cid) or True
-        tab.share_checkbox.setChecked(True)
+        tab.set_mode("control")
         assert tab.serving
         known = KnownServers(db.connect(tmp_path / "client.db"))
         record = known.get(f"127.0.0.1:{first_port}")
@@ -163,7 +163,7 @@ def test_discovery_port_conflict_is_reported(qapp, credentials, tmp_path):
     try:
         tab = make_tab(credentials, tmp_path, discovery_port=port, enabled=False)
         try:
-            tab.share_checkbox.setChecked(True)
+            tab.set_mode("control")
             assert tab._listening
             assert not tab._discoverable
             assert "Not discoverable" in tab._summary.text()
@@ -183,7 +183,7 @@ def test_connect_port_conflict_is_reported(qapp, credentials, tmp_path):
     try:
         tab = make_tab(credentials, tmp_path, connect_port=port, enabled=False)
         try:
-            tab.share_checkbox.setChecked(True)
+            tab.set_mode("control")
             assert not tab.serving
             assert tab.responder is None
             assert "Cannot share" in tab._summary.text()
@@ -277,7 +277,7 @@ def test_revoke_works_while_not_sharing(qapp, credentials, tmp_path, monkeypatch
     try:
         pump(qapp, lambda: names)
         assert tab._paired.token_for(CLIENT_ID) is not None
-        tab.share_checkbox.setChecked(False)  # stop sharing; pairing remains
+        tab.set_mode("off")  # stop sharing; pairing remains
         assert tab._paired.token_for(CLIENT_ID) is not None
 
         tab.revoke_client(CLIENT_ID)
@@ -409,22 +409,36 @@ def test_viewers_table_flags_a_major_version_mismatch(qapp):
     assert cells == [__version__, "99.0.0 ⚠", "—"]
 
 
-def test_allow_input_checkbox_persists_and_applies(qapp, credentials, tmp_path):
+def test_sharing_mode_three_states_persist_and_apply(qapp, credentials, tmp_path):
+    from remotedesktop.server import ALLOW_INPUT_KEY
+
     tab = make_tab(credentials, tmp_path, enabled=False)
     try:
-        assert tab.allow_input_checkbox.isChecked()  # default: viewers control
-        tab.allow_input_checkbox.setChecked(False)
-        assert tab._settings.get(SharingTab.ALLOW_INPUT_KEY) == "0"
-        assert any("watch but not control" in m for m in tab.messages)
+        assert tab.mode == "off"
 
-        tab.share_checkbox.setChecked(True)  # starts sharing with input off
+        tab.set_mode("view")  # starts sharing, viewers watch only
+        assert tab.serving
         assert tab.share_server._input_allowed is False
-        tab.allow_input_checkbox.setChecked(True)  # live re-enable
+        assert tab._settings.get(ALLOW_INPUT_KEY) == "0"
+        assert tab.mode == "view"
+
+        server_before = tab.share_server
+        tab.set_mode("control")  # live switch: viewers keep their stream
+        assert tab.share_server is server_before
         assert tab.share_server._input_allowed is True
         assert any("Remote input enabled" in m for m in tab.messages)
+        assert tab.mode == "control"
 
-        # Persisted: a fresh tab on the same DB starts unchecked.
-        tab.allow_input_checkbox.setChecked(False)
+        tab.set_mode("view")  # and back, still live
+        assert tab.share_server is server_before
+        assert tab.share_server._input_allowed is False
+        assert any("watch but not control" in m for m in tab.messages)
+
+        tab.set_mode("off")
+        assert not tab.serving
+        assert tab.mode == "off"
+        # The view-only preference survived turning sharing off.
+        assert tab._settings.get(ALLOW_INPUT_KEY) == "0"
     finally:
         tab.shutdown()
 
@@ -444,7 +458,7 @@ def test_viewer_count_signal_follows_connections(qapp, credentials, tmp_path, mo
         assert tab.viewer_count == 1
         client.close()
         pump(qapp, lambda: counts and counts[-1] == 0)
-        tab.share_checkbox.setChecked(False)
+        tab.set_mode("off")
         assert tab.viewer_count == 0
         assert counts[-1] == 0
     finally:

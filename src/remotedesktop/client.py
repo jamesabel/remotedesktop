@@ -34,8 +34,8 @@ class _ServerList(QListWidget):
     """Server list that paints a hint while empty."""
 
     placeholder_text = (
-        "No servers found yet — tick \"Share this computer's screen\" "
-        "on the computer to share"
+        "No servers found yet — turn on Screen sharing in the Preferences "
+        "tab on the computer to share"
     )
 
     def paintEvent(self, event) -> None:

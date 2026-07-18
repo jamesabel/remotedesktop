@@ -88,14 +88,21 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         assert "Remote Desktop started" in window.connection_log.toPlainText()
         tabs = window.centralWidget()
         labels = [tabs.tabText(i) for i in range(tabs.count())]
-        for expected in ("Server", "Performance", "Connection log", "Preferences", "About"):
+        for expected in ("Connections", "Performance", "Preferences", "About"):
             assert expected in labels
-        # The Server tab groups the sharing opt-in and both peer inventories.
+        assert "Connection log" not in labels  # folded into Connections
+        # The Connections tab grids sharing status, both peer inventories,
+        # and the connection log.
         from PySide6.QtWidgets import QGroupBox
 
-        server_tab = tabs.widget(labels.index("Server"))
-        groups = [g.title() for g in server_tab.findChildren(QGroupBox)]
-        assert groups == ["Sharing this computer", "Servers on LAN", "Clients on LAN"]
+        connections_tab = tabs.widget(labels.index("Connections"))
+        groups = [g.title() for g in connections_tab.findChildren(QGroupBox)]
+        assert groups == [
+            "Sharing this computer",
+            "Servers on LAN",
+            "Clients on LAN",
+            "Connection log",
+        ]
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
         # Idle: neither role schedules periodic work.
@@ -116,7 +123,7 @@ def test_sharing_window_title_carries_the_suffix(qapp, credentials, tmp_path):
 
         assert window.sharing_tab.serving
         assert window.windowTitle() == f"Remote Desktop {__version__} — sharing"
-        window.sharing_tab.share_checkbox.setChecked(False)
+        window.sharing_tab.set_mode("off")
         assert window.windowTitle() == f"Remote Desktop {__version__}"
     finally:
         window.close()
@@ -380,7 +387,7 @@ def test_stopping_sharing_while_hidden_restores_the_window(qapp, credentials, tm
         window.show()
         window.close()
         assert window.isHidden()
-        window.sharing_tab.share_checkbox.setChecked(False)
+        window.sharing_tab.set_mode("off")
         # No tray icon without sharing, so the window must come back.
         assert not window.isHidden()
         assert window._tray is None
@@ -863,7 +870,7 @@ def test_sharing_indicator_lifecycle(qapp, credentials, tmp_path, monkeypatch):
         pump(qapp, lambda: session.connected)
         pump(qapp, lambda: serving._sharing_indicator.text() == "Sharing — 1 viewer(s)")
 
-        serving.sharing_tab.share_checkbox.setChecked(False)
+        serving.sharing_tab.set_mode("off")
         assert serving._sharing_indicator.isHidden()
     finally:
         viewing.close()
@@ -916,3 +923,25 @@ def test_quit_without_viewers_never_prompts(qapp, credentials, tmp_path, monkeyp
     monkeypatch.setattr(QMessageBox, "question", staticmethod(prompted))
     serving._quit()
     assert quits == [True]
+
+
+def test_preferences_sharing_mode_drives_the_sharing_lifecycle(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials)
+    try:
+        assert not window.sharing_tab.serving
+        assert window.preferences_tab.sharing_off_radio.isChecked()
+
+        window.preferences_tab.sharing_view_radio.setChecked(True)
+        assert window.sharing_tab.serving
+        assert window.sharing_tab.share_server._input_allowed is False
+
+        server_before = window.sharing_tab.share_server
+        window.preferences_tab.sharing_control_radio.setChecked(True)
+        assert window.sharing_tab.share_server is server_before  # live switch
+        assert window.sharing_tab.share_server._input_allowed is True
+
+        window.preferences_tab.sharing_off_radio.setChecked(True)
+        assert not window.sharing_tab.serving
+        assert window._sharing_indicator.isHidden()
+    finally:
+        window.close()
