@@ -46,16 +46,18 @@ of servers seen and clients paired, with one-click *Forget* / *Revoke*.
 ## Features
 
 - 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is an opt-in checkbox on the *Server* tab, and only one instance runs per computer (launching it again just raises the existing window).
-- 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type.
+- 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type, and the list refreshes itself in the background.
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
-- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys.
-- 📋 **Two-way clipboard** — text and images copied on either machine appear on the other.
+- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Untick *Allow viewers to control this computer* and sharing becomes view-only.
+- 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
+- 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
-- 🔁 **Robust connections** — dead connections are detected and dropped within seconds, and approved clients reconnect automatically without ceremony.
+- 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed.
 - 🚀 **Hands-off operation** — optional start-at-login (per-user, no admin rights), close-to-tray while sharing (the screen stays available with the window closed), and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
-- 🗃️ **Persistent peer inventory** — both apps keep a SQLite-backed history of every peer seen on the LAN, with one-click *revoke access* / *forget server*.
+- 🗃️ **Persistent peer inventory** — a SQLite-backed history of every peer seen on the LAN, with one-click *Revoke* / *Forget*.
+- 🧭 **Desktop-app niceties** — a real menu bar with standard shortcuts, a status-bar sharing indicator, a confirmation before quitting with viewers connected, and window/panel layout that persists across restarts.
 
 In scope: screen, keyboard, mouse, and clipboard. Out of scope: shared
 drives, devices, and audio — and smooth playback of fast-changing

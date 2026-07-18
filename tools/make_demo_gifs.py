@@ -227,6 +227,9 @@ def main() -> None:
     }
     QMessageBox.show = lambda self: None  # approval prompt answers itself
     QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
+    # question() is a C++ static that bypasses the patched exec; without this
+    # the quit-with-viewers confirmation would block the run on a real dialog.
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)  # ty: ignore[invalid-assignment]
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
