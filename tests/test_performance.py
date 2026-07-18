@@ -108,6 +108,41 @@ def test_ping_pong_records_rtt_and_replies(qapp):
     assert monitor.peer_rtt_ms.latest() == 12.5
 
 
+def test_per_stream_metrics_track_each_viewer(qapp):
+    clock = FakeClock()
+    monitor = PerformanceMonitor(clock=clock)
+    first, second = FakeStream(), FakeStream()
+    monitor.add_stream(first)
+    monitor.add_stream(second)
+    monitor._on_tick()  # baselines; every attached stream gets its own ping
+    assert [m["type"] for m in first.sent] == ["ping"]
+    assert [m["type"] for m in second.sent] == ["ping"]
+    first.bytes_sent += 1000
+    second.bytes_sent += 500
+    clock.advance(2.0)
+    monitor._on_tick()
+    assert monitor.metrics_for(first)["send_bps"] == 500.0
+    assert monitor.metrics_for(second)["send_bps"] == 250.0
+    # Each stream's pong records that stream's RTT; the graph series only
+    # follows the active (most recently attached) stream.
+    clock.advance(0.05)
+    monitor.handle_message(first, {"type": "pong", "id": first.sent[-1]["id"]})
+    assert monitor.metrics_for(first)["rtt_ms"] == pytest.approx(50.0)
+    assert monitor.rtt_ms.latest() is None  # first is not the active stream
+    # An incoming ping's piggybacked measurement lands on its own stream.
+    monitor.handle_message(first, {"type": "ping", "id": 99, "rtt": 12.5})
+    assert monitor.metrics_for(first)["peer_rtt_ms"] == 12.5
+    assert monitor.peer_rtt_ms.latest() is None
+    # A pong answered on the wrong stream is ignored.
+    monitor.handle_message(first, {"type": "pong", "id": second.sent[-1]["id"]})
+    assert monitor.metrics_for(second)["rtt_ms"] is None
+    # Removing a stream clears its numbers.
+    monitor.remove_stream(first)
+    assert monitor.metrics_for(first) == {
+        "send_bps": None, "recv_bps": None, "rtt_ms": None, "peer_rtt_ms": None,
+    }
+
+
 def test_stale_or_malformed_pongs_are_ignored(qapp):
     monitor = PerformanceMonitor(clock=FakeClock())
     stream = FakeStream()
@@ -171,6 +206,32 @@ def make_pair(credentials, tmp_path, *, server_perf, client_perf):
         performance=client_perf,
     )
     return server, client
+
+
+def test_server_viewers_snapshot_carries_hello_details(qapp, credentials, tmp_path):
+    server_perf = PerformanceMonitor(interval_ms=50)
+    server, client = make_pair(
+        credentials,
+        tmp_path,
+        server_perf=server_perf,
+        client_perf=PerformanceMonitor(interval_ms=50),  # answers the pings
+    )
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        viewers = server.viewers()
+        assert len(viewers) == 1
+        viewer = viewers[0]
+        assert viewer["name"] and viewer["user"] and viewer["host"]
+        assert viewer["os"].startswith("Windows")
+        assert "127.0.0.1" in viewer["address"]
+        # The stream key links the snapshot to per-viewer metrics.
+        pump(qapp, lambda: server_perf.metrics_for(viewer["stream"])["rtt_ms"] is not None)
+    finally:
+        client.close()
+        server.close()
 
 
 def test_rtt_and_bandwidth_measured_on_both_ends(qapp, credentials, tmp_path):

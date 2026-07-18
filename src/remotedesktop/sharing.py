@@ -13,8 +13,10 @@ Both classes emit human-readable `status` messages for every phase so the
 GUIs can show a debug log.
 """
 
+import getpass
 import hmac
 import logging
+import platform
 import socket as socket_module
 import time
 from collections.abc import Callable
@@ -66,7 +68,26 @@ _PREAUTH_MAX_PAYLOAD = 64 * 1024
 
 
 def _peer(sock: QTcpSocket) -> str:
-    return f"{sock.peerAddress().toString()}:{sock.peerPort()}"
+    host = sock.peerAddress().toString()
+    # The server listens dual-stack, so IPv4 peers arrive as IPv4-mapped
+    # IPv6 addresses ("::ffff:192.168.6.29") — show them as plain IPv4.
+    if host.startswith("::ffff:"):
+        host = host[len("::ffff:") :]
+    return f"{host}:{sock.peerPort()}"
+
+
+def _client_details() -> dict:
+    """Who and what this client machine is, shown in the server's viewers
+    table. Best-effort: a missing login name just yields an empty field."""
+    try:
+        user = getpass.getuser()
+    except OSError:
+        user = ""
+    return {
+        "user": user,
+        "host": socket_module.gethostname(),
+        "os": f"{platform.system()} {platform.release()} ({platform.version()})",
+    }
 
 
 def _coord(value) -> float:
@@ -129,6 +150,9 @@ class ShareServer(QObject):
         # backlog, or asked for one), and the previous capture to diff.
         self._delta_capable: set[MessageStream] = set()
         self._needs_keyframe: set[MessageStream] = set()
+        # What each stream's hello said about the machine behind it
+        # (name/user/host/os), for the server UI's viewers table.
+        self._viewer_info: dict[MessageStream, dict] = {}
         self._previous_frame: QImage | None = None
         # DXGI desktop duplication (~10 ms per changed 4K frame, ~0 when the
         # screen is idle, vs ~96 ms for grabWindow). Created lazily on the
@@ -184,6 +208,7 @@ class ShareServer(QObject):
         self._backlogged.clear()
         self._delta_capable.clear()
         self._needs_keyframe.clear()
+        self._viewer_info.clear()
         self._previous_frame = None
         if self._dxgi is not None:
             self._dxgi.close()
@@ -264,6 +289,21 @@ class ShareServer(QObject):
             return
         self._handle_hello(stream, message)
 
+    def viewers(self) -> list[dict]:
+        """One entry per admitted stream for the server UI's viewers table:
+        {name, address, user, host, os, stream} — the stream is the key for
+        PerformanceMonitor.metrics_for."""
+        result = []
+        for stream in self._streams:
+            info = dict(self._viewer_info.get(stream, {}))
+            info.setdefault("name", "")
+            info.setdefault("address", _peer(stream.socket))
+            for field in ("user", "host", "os"):
+                info.setdefault(field, "")
+            info["stream"] = stream
+            result.append(info)
+        return result
+
     def revoke_client(self, client_id: str) -> None:
         """Remove a client's pairing and disconnect it if currently connected.
 
@@ -305,6 +345,13 @@ class ShareServer(QObject):
         self.status.emit(f'Hello from "{client_name}" ({client_id}) at {peer}')
         if message.get("delta"):
             self._delta_capable.add(stream)
+        self._viewer_info[stream] = {
+            "name": client_name,
+            "address": peer,
+            "user": str(message.get("user", "")),
+            "host": str(message.get("host", "")),
+            "os": str(message.get("os", "")),
+        }
         if isinstance(client_id, str) and client_id:
             self._stream_key[stream] = (client_id, client_name, peer)
             self._emit_peer(stream, "attempt")
@@ -471,6 +518,7 @@ class ShareServer(QObject):
         self._backlogged.discard(stream)
         self._delta_capable.discard(stream)
         self._needs_keyframe.discard(stream)
+        self._viewer_info.pop(stream, None)
         self._release_input(stream)
         final = stream in self._final
         self._final.discard(stream)
@@ -714,6 +762,7 @@ class ShareClient(QObject):
             "client_id": self._client_id,
             "name": self._name,
             "delta": True,  # we understand inter-frame delta messages
+            **_client_details(),
         }
         if self._server_token:
             hello["token"] = self._server_token

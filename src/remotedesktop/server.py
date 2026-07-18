@@ -8,15 +8,19 @@ import sys
 import time
 
 from PySide6.QtCore import QProcess, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -34,11 +38,69 @@ from remotedesktop.discovery import (
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.modal_loop import ModalLoopPump
-from remotedesktop.performance import PerformanceMonitor, PerformanceTab
+from remotedesktop.performance import PerformanceMonitor, PerformanceTab, format_ms, format_rate
 from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
 from remotedesktop.sharing import ShareServer
 
 _log = logging.getLogger("remotedesktop.server")
+
+
+class ViewersTable(QTableWidget):
+    """Connected viewers with who/what they are and live per-viewer metrics.
+
+    Identity fields come from each viewer's hello (`ShareServer.viewers()`);
+    Send/Receive/Round trip come from the performance monitor's per-stream
+    numbers. Rows refresh when the viewer count changes and once per monitor
+    tick — but only while visible (background tabs schedule no work).
+    """
+
+    _COLUMNS = ["Name", "Address", "User", "Computer", "OS", "Send", "Receive", "Round trip"]
+
+    def __init__(self, share_server, performance: PerformanceMonitor, parent=None) -> None:
+        # One extra headerless column takes the stretch so the data columns
+        # stay sized to their contents (the InventoryTab spacer pattern).
+        super().__init__(0, len(self._COLUMNS) + 1, parent)
+        self.setHorizontalHeaderLabels(self._COLUMNS + [""])
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.horizontalHeader().setStretchLastSection(True)
+        self._share_server = share_server
+        self._performance = performance
+        share_server.clientCountChanged.connect(self._on_count_changed)
+        performance.updated.connect(self._on_monitor_tick)
+        self.refresh()
+
+    def _on_count_changed(self, _count: int) -> None:
+        self.refresh()
+
+    def _on_monitor_tick(self) -> None:
+        if self.isVisible():
+            self.refresh()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self.refresh()  # catch up on metrics accrued while hidden
+
+    def refresh(self) -> None:
+        viewers = self._share_server.viewers()
+        self.setRowCount(len(viewers))
+        for row, viewer in enumerate(viewers):
+            metrics = self._performance.metrics_for(viewer["stream"])
+            send, recv, rtt = metrics["send_bps"], metrics["recv_bps"], metrics["rtt_ms"]
+            values = [
+                viewer["name"] or "(unknown)",
+                viewer["address"],
+                viewer["user"] or "—",
+                viewer["host"] or "—",
+                viewer["os"] or "—",
+                format_rate(send) if send is not None else "—",
+                format_rate(recv) if recv is not None else "—",
+                format_ms(rtt) if rtt is not None else "—",
+            ]
+            for column, value in enumerate(values):
+                self.setItem(row, column, QTableWidgetItem(value))
 
 
 class ServerWindow(QMainWindow):
@@ -90,9 +152,10 @@ class ServerWindow(QMainWindow):
         status_tab = QWidget()
         status_layout = QVBoxLayout(status_tab)
         status_layout.addWidget(self._summary)
+        # The viewers table is inserted here (index 1) once share_server
+        # exists, taking the tab's spare space.
         status_layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         status_layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-        status_layout.addStretch(1)
 
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
@@ -133,6 +196,8 @@ class ServerWindow(QMainWindow):
             log_provider=lambda: read_log_tail("server"),
             parent=self,
         )
+        self.viewers_table = ViewersTable(self.share_server, self.performance)
+        status_layout.insertWidget(1, self.viewers_table, stretch=1)
         self.share_server.status.connect(self.log)
         self.share_server.clientCountChanged.connect(self._update_summary)
         self.share_server.peerEvent.connect(self._record_peer)
