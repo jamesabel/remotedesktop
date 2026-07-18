@@ -20,12 +20,15 @@ from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
+    QFrame,
     QGroupBox,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSystemTrayIcon,
     QTabBar,
     QTabWidget,
@@ -91,6 +94,8 @@ class MainWindow(QMainWindow):
         self._tray: QSystemTrayIcon | None = None
         self._tray_notified = False
         self._quitting = False
+        self._fullscreen_state: dict | None = None
+        self._fullscreen_hint: QLabel | None = None
 
         self.sharing_tab = SharingTab(
             settings=self._settings,
@@ -247,6 +252,18 @@ class MainWindow(QMainWindow):
         self.refresh_action = self._view_menu.addAction("&Refresh server list")
         self.refresh_action.setShortcut(QKeySequence("F5"))
         self.refresh_action.triggered.connect(self.discovery_panel.refresh)
+        self._view_menu.addSeparator()
+        self.actual_size_action = self._view_menu.addAction("&Actual size")
+        self.actual_size_action.setCheckable(True)
+        self.actual_size_action.setEnabled(False)  # session tabs only
+        # `triggered` (not `toggled`): tab-switch sync via setChecked must
+        # not re-apply the mode.
+        self.actual_size_action.triggered.connect(self._on_actual_size_triggered)
+        self.fullscreen_action = self._view_menu.addAction("&Full screen")
+        self.fullscreen_action.setShortcut(QKeySequence("F11"))
+        self.fullscreen_action.setCheckable(True)
+        self.fullscreen_action.setEnabled(False)  # session tabs only
+        self.fullscreen_action.triggered.connect(self._toggle_fullscreen)
         self._help_menu = bar.addMenu("&Help")
         self.about_action = self._help_menu.addAction("&About")
         self.about_action.triggered.connect(
@@ -256,21 +273,101 @@ class MainWindow(QMainWindow):
         # when the menu bar is hidden (fullscreen). While a viewer has a
         # frame and focus, its ShortcutOverride handling forwards these keys
         # to the remote machine instead — F11 is the one reserved local key.
-        for action in (self.close_tab_action, self.quit_action, self.refresh_action):
+        for action in (
+            self.close_tab_action,
+            self.quit_action,
+            self.refresh_action,
+            self.fullscreen_action,
+        ):
             self.addAction(action)
 
     def _on_current_tab_changed(self, _index: int) -> None:
         self._refresh_status_bar()
-        close_action = getattr(self, "close_tab_action", None)
-        if close_action is not None:  # menus are built after the tabs
-            close_action.setEnabled(
-                self._session_for_viewer(self._tabs.currentWidget()) is not None
-            )
+        if getattr(self, "close_tab_action", None) is None:
+            return  # menus are built after the tabs
+        session = self._session_for_page(self._tabs.currentWidget())
+        self.close_tab_action.setEnabled(session is not None)
+        self.fullscreen_action.setEnabled(session is not None)
+        self.actual_size_action.setEnabled(session is not None)
+        self.actual_size_action.setChecked(session.actual_size if session else False)
 
     def _close_current_session_tab(self) -> None:
-        session = self._session_for_viewer(self._tabs.currentWidget())
+        session = self._session_for_page(self._tabs.currentWidget())
         if session is not None:
             self._close_session(session)
+
+    def _on_actual_size_triggered(self, checked: bool) -> None:
+        session = self._session_for_page(self._tabs.currentWidget())
+        if session is None:
+            return
+        session.actual_size = checked
+        session.page.setWidgetResizable(not checked)
+        session.viewer.set_actual_size(checked)
+
+    # --------------------------------------------------------- fullscreen
+
+    def _toggle_fullscreen(self) -> None:
+        if self._fullscreen_state is not None:
+            self._exit_fullscreen()
+        else:
+            self._enter_fullscreen()
+
+    def _enter_fullscreen(self) -> None:
+        if self._session_for_page(self._tabs.currentWidget()) is None:
+            self.fullscreen_action.setChecked(False)
+            return
+        self._fullscreen_state = {
+            "maximized": self.isMaximized(),
+            "dock_visible": self.servers_dock.isVisible(),
+        }
+        self.menuBar().hide()
+        self.statusBar().hide()
+        self.servers_dock.hide()
+        self._tabs.tabBar().hide()
+        self.showFullScreen()
+        self.fullscreen_action.setChecked(True)
+        self._show_fullscreen_hint()
+
+    def _exit_fullscreen(self) -> None:
+        state = self._fullscreen_state
+        if state is None:
+            return
+        self._fullscreen_state = None
+        if self._fullscreen_hint is not None:
+            self._fullscreen_hint.deleteLater()
+            self._fullscreen_hint = None
+        self.menuBar().show()
+        self.statusBar().show()
+        # A dock the user had closed before fullscreen stays closed.
+        self.servers_dock.setVisible(state["dock_visible"])
+        self._tabs.tabBar().show()
+        if state["maximized"]:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self.fullscreen_action.setChecked(False)
+
+    def _show_fullscreen_hint(self) -> None:
+        hint = QLabel("F11 exits full screen", self)
+        hint.setStyleSheet(
+            "background-color: rgba(0, 0, 0, 180); color: white; "
+            "padding: 6px 14px; border-radius: 4px;"
+        )
+        self._fullscreen_hint = hint
+
+        def place() -> None:
+            # Deferred: the fullscreen resize hasn't happened yet when the
+            # hint is created. The stored reference is cleared on exit, so a
+            # dangling wrapper here means fullscreen already ended.
+            if self._fullscreen_hint is not hint:
+                return
+            hint.adjustSize()
+            hint.move((self.width() - hint.width()) // 2, 32)
+            hint.show()
+            hint.raise_()
+
+        QTimer.singleShot(250, place)
+        QTimer.singleShot(3500, hint.hide)
 
     def _update_window_title(self) -> None:
         """Connected server names lead the title, so the taskbar (and a
@@ -332,6 +429,10 @@ class MainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._fullscreen_state is not None:
+            # Restore the chrome first so the persisted layout never captures
+            # the stripped fullscreen state.
+            self._exit_fullscreen()
         window_state.save_geometry(self, self._settings, window_state.MAIN_GEOMETRY_KEY)
         window_state.save_state(self, self._settings, window_state.MAIN_STATE_KEY)
         if self.sharing_tab.serving and self._tray is not None and not self._quitting:
@@ -451,19 +552,19 @@ class MainWindow(QMainWindow):
                 return session
         return None
 
-    def _session_for_viewer(self, widget) -> ServerSession | None:
+    def _session_for_page(self, widget) -> ServerSession | None:
         for session in self._sessions:
-            if session.viewer is widget:
+            if session.page is widget:
                 return session
         return None
 
     def _set_session_status(self, session: ServerSession, text: str) -> None:
         session.status_text = text
-        if self._tabs.currentWidget() is session.viewer:
+        if self._tabs.currentWidget() is session.page:
             self.statusBar().showMessage(text)
 
     def _refresh_status_bar(self) -> None:
-        session = self._session_for_viewer(self._tabs.currentWidget())
+        session = self._session_for_page(self._tabs.currentWidget())
         if session is not None:
             self.statusBar().showMessage(session.status_text)
             return
@@ -506,7 +607,7 @@ class MainWindow(QMainWindow):
         key = f"{server.host}:{server.port}"
         session = self._session_for_key(key)
         if session is not None and session.connected:
-            self._tabs.setCurrentWidget(session.viewer)
+            self._tabs.setCurrentWidget(session.page)
             self.log(f"Already connected to {session.name} ({key})")
             return
         if session is None:
@@ -518,6 +619,16 @@ class MainWindow(QMainWindow):
 
     def _create_session(self, key: str, name: str) -> ServerSession:
         viewer = ViewerWidget()
+        # The tab page is a scroll area: fit mode (widgetResizable) sizes the
+        # viewer to the viewport as before; actual-size mode sizes the viewer
+        # to the frame and the scroll area provides the panning.
+        page = QScrollArea()
+        page.setWidget(viewer)
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.Shape.NoFrame)
+        page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        page.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        page.viewport().setStyleSheet("background-color: black;")
         client = ShareClient(
             identity=self._identity,
             known_servers=self._known_servers,
@@ -526,7 +637,7 @@ class MainWindow(QMainWindow):
             log_provider=lambda: read_log_tail("remotedesktop"),
             parent=self,
         )
-        session = ServerSession(key, name, client, viewer)
+        session = ServerSession(key, name, client, viewer, page)
         viewer.inputEvent.connect(lambda event, s=session: self._on_input_event(s, event))
         client.status.connect(lambda message, s=session: self.log(f"[{s.name}] {message}"))
         client.connected.connect(lambda server_name, s=session: self._on_connected(s, server_name))
@@ -536,7 +647,7 @@ class MainWindow(QMainWindow):
         client.frameReceived.connect(lambda image, s=session: self._on_frame(s, image))
         client.logReceived.connect(lambda text, s=session: self._show_server_log(s.name, text))
         self._sessions.append(session)
-        self._tabs.insertTab(len(self._sessions) - 1, viewer, session.name)
+        self._tabs.insertTab(len(self._sessions) - 1, page, session.name)
         return session
 
     def _connect_session(self, session: ServerSession, host: str, port: int) -> None:
@@ -553,7 +664,7 @@ class MainWindow(QMainWindow):
         if not any(s.connected for s in self._sessions if s is not session):
             self.client_performance.reset()
         session.viewer.clear(f"Connecting to {session.name} …")
-        self._tabs.setCurrentWidget(session.viewer)
+        self._tabs.setCurrentWidget(session.page)
         self._set_session_status(
             session, f"Connecting to {session.name} ({session.key}) …"
         )
@@ -569,7 +680,7 @@ class MainWindow(QMainWindow):
             self.client_inventory.record(session.key, "disconnected", name=session.name)
         session.connected = False
         session.client.deleteLater()
-        session.viewer.deleteLater()
+        session.page.deleteLater()  # the viewer is its child
         self.log(f"Closed connection to {session.name} ({session.key})")
         self._update_window_title()
         self._refresh_status_bar()
@@ -659,7 +770,7 @@ class MainWindow(QMainWindow):
         self._update_window_title()
 
     def _request_server_log(self) -> None:
-        session = self._session_for_viewer(self._tabs.currentWidget())
+        session = self._session_for_page(self._tabs.currentWidget())
         if session is None:
             connected = [s for s in self._sessions if s.connected]
             session = connected[-1] if connected else None

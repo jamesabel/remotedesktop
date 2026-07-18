@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -97,11 +98,20 @@ class ServerSession:
     (and its tab) outlives a disconnect, so the user can reconnect in place;
     closing the tab ends the session."""
 
-    def __init__(self, key: str, name: str, client: ShareClient, viewer: ViewerWidget) -> None:
+    def __init__(
+        self,
+        key: str,
+        name: str,
+        client: ShareClient,
+        viewer: ViewerWidget,
+        page: QScrollArea,
+    ) -> None:
         self.key = key  # "host:port", the KnownServers/inventory key
         self.name = name
         self.client = client
         self.viewer = viewer
+        self.page = page  # the tab page hosting the viewer
+        self.actual_size = False  # 1:1 display instead of scaled-to-fit
         self.connected = False
         self.denied = False
         self.version_mismatch = False
