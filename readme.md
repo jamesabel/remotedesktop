@@ -8,11 +8,11 @@
 
 **Lossless, low-latency remote desktop for Windows computers on your LAN — one app, pure Python, zero configuration.**
 
-Run the same app on every computer. Tick *Share this computer's screen on
-the LAN* on the ones you want to reach, and they appear automatically in
-every other instance's *Servers* panel: the first connection is approved
-with one click on the shared computer, and from then on it reconnects
-instantly. View several computers at once — each in its own tab — while
+Run the same app on every computer. Turn on *Screen sharing* (view only or
+full control) in Preferences on the ones you want to reach, and they appear
+automatically in every other instance's *Servers* panel: the first
+connection is approved with one click on the shared computer, and from then
+on it reconnects instantly. View several computers at once — each in its own tab — while
 optionally sharing your own screen at the same time; closing the window
 while sharing keeps serving from the system tray. The screen stream is
 pixel-exact at full resolution — built for documents, code, and terminals
@@ -37,19 +37,20 @@ time with live statistics.
 
 ![Sharing demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/server-demo.gif)
 
-The *Server* tab is where an instance opts in to being shared. It shows
-every connected viewer — who they are (login name, computer, OS) and how
-the connection is doing (bandwidth, round-trip time with
-mean/min/max/p99/jitter over the recent window) — along with the history
-of servers seen and clients paired, with one-click *Forget* / *Revoke*.
+Sharing is turned on in Preferences (*view only* or *full control*). The
+*Connections* tab then shows everything in one place: every connected
+viewer — who they are (login name, computer, OS) and how the connection is
+doing (bandwidth, round-trip time with mean/min/max/p99/jitter over the
+recent window) — the history of servers seen and clients paired with
+one-click *Forget* / *Revoke*, and the live connection log.
 
 ## Features
 
-- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is an opt-in checkbox on the *Server* tab, and only one instance runs per computer (launching it again just raises the existing window).
+- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is a three-state choice in Preferences (*Not shared* / *view only* / *full control*), and only one instance runs per computer (launching it again just raises the existing window).
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type, and the list refreshes itself in the background.
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
-- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Untick *Allow viewers to control this computer* and sharing becomes view-only.
+- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared — viewers can watch only* and sharing becomes view-only, switchable live.
 - 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
@@ -82,8 +83,8 @@ it prepares the environment on first use and launches the app.
 ## Quick start
 
 1. Run `remotedesktop` on both computers.
-2. On the computer to share, open the *Server* tab and tick
-   *Share this computer's screen on the LAN*.
+2. On the computer to share, open *Preferences* and set *Screen sharing*
+   to one of the *Shared* modes.
 3. On the viewing computer, the shared computer appears in the *Servers*
    panel — double-click it.
 4. Approve the connection in the dialog that pops up on the shared
@@ -103,7 +104,7 @@ certificates are trusted on first use and a changed fingerprint is logged
 rather than blocking the connection, favoring reliable reconnection over
 strict certificate checking. Unapproved clients are limited to small
 handshake messages until the user at the shared computer admits them;
-access can be revoked at any time from the *Server* tab. There is
+access can be revoked at any time from the *Connections* tab. There is
 no dependency
 on Windows RDP or any Microsoft-based authentication.
 

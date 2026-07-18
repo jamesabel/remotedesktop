@@ -291,8 +291,8 @@ def main() -> None:
         client_tabs = client_window.centralWidget()
         server_tabs = server_window.centralWidget()
         assert isinstance(client_tabs, QTabWidget) and isinstance(server_tabs, QTabWidget)
-        # The sharing instance opens on its Server tab (its "home" view).
-        server_tabs.setCurrentIndex(tab_index(server_tabs, "Server"))
+        # The sharing instance opens on its Connections tab (its "home" view).
+        server_tabs.setCurrentIndex(tab_index(server_tabs, "Connections"))
 
         # The live remote-screen section is the product's whole point, so it
         # gets the lion's share of the runtime: DEN-PC streams alone first,
@@ -312,7 +312,7 @@ def main() -> None:
             # The sharing instance's numbers live on the Sharing sub-tab.
             (21.7, lambda: server_window.performance_pages.setCurrentIndex(1)),
             (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "DEN-PC"))),
-            (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Server"))),
+            (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Connections"))),
         ]
         client_frames: list[Image.Image] = []
         server_frames: list[Image.Image] = []

@@ -3,11 +3,12 @@ one — both roles in a single window.
 
 Viewing: the Servers dock discovers servers on the LAN; each connection is a
 `ServerSession` shown in its own closable tab (`remotedesktop.client`).
-Sharing: the "Server" tab groups everything server-related — the sharing
-opt-in (`remotedesktop.server.SharingTab`) and both peer inventories. While
-sharing is enabled, closing the window hides to the system tray and sharing
-continues; quitting is in the tray menu. Only one instance runs per user
-session (`single_instance`)."""
+The "Connections" tab groups everything connection-related — sharing status
+and viewers (`remotedesktop.server.SharingTab`), both peer inventories, and
+the connection log — while the sharing mode itself (off / view only / full
+control) is chosen in Preferences. While sharing is enabled, closing the
+window hides to the system tray and sharing continues; quitting is in the
+tray menu. Only one instance runs per user session (`single_instance`)."""
 
 import logging
 import sqlite3
@@ -21,7 +22,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
     QFrame,
+    QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
@@ -121,7 +124,6 @@ class MainWindow(QMainWindow):
         self.sharing_tab.peerEvent.connect(self._record_server_peer)
         self.sharing_tab.sharingChanged.connect(self._on_sharing_changed)
         self.sharing_tab.viewerCountChanged.connect(self._update_sharing_indicator)
-        self.sharing_tab.restartRequested.connect(self._restart_app)
 
         # One tab per server connection (inserted at the front, closable),
         # followed by the fixed tabs, which never get a close button.
@@ -130,10 +132,25 @@ class MainWindow(QMainWindow):
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.currentChanged.connect(self._on_current_tab_changed)
-        # One "Server" tab holds everything server-related: the sharing
-        # opt-in with its viewers, plus both peer inventories.
-        server_tab = QWidget()
-        server_layout = QVBoxLayout(server_tab)
+        # One "Connections" tab holds everything connection-related in a 2×2
+        # grid: sharing status + viewers, both peer inventories, and the
+        # connection log.
+        self.connection_log = QPlainTextEdit(self)
+        self.connection_log.setReadOnly(True)
+        self.connection_log.setMaximumBlockCount(1000)
+        self.get_log_button = QPushButton("Get server log")
+        self.get_log_button.setToolTip(
+            "Ask the server shown in the current tab to send its debug log"
+        )
+        self.get_log_button.clicked.connect(self._request_server_log)
+        self.get_client_log_button = QPushButton("Get client log")
+        self.get_client_log_button.setToolTip(
+            "Ask the most recently connected viewer of this computer to send its debug log"
+        )
+        self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
+
+        connections_tab = QWidget()
+        grid = QGridLayout(connections_tab)
         sharing_group = QGroupBox("Sharing this computer")
         QVBoxLayout(sharing_group).addWidget(self.sharing_tab)
         servers_group = QGroupBox("Servers on LAN")
@@ -144,10 +161,22 @@ class MainWindow(QMainWindow):
         QVBoxLayout(clients_group).addWidget(
             InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
         )
-        server_layout.addWidget(sharing_group, stretch=2)
-        server_layout.addWidget(servers_group, stretch=1)
-        server_layout.addWidget(clients_group, stretch=1)
-        self._tabs.addTab(server_tab, "Server")
+        log_group = QGroupBox("Connection log")
+        log_layout = QVBoxLayout(log_group)
+        log_buttons = QHBoxLayout()
+        log_buttons.addWidget(self.get_log_button)
+        log_buttons.addWidget(self.get_client_log_button)
+        log_buttons.addStretch(1)
+        log_layout.addLayout(log_buttons)
+        log_layout.addWidget(self.connection_log)
+        grid.addWidget(sharing_group, 0, 0)
+        grid.addWidget(servers_group, 0, 1)
+        grid.addWidget(clients_group, 1, 0)
+        grid.addWidget(log_group, 1, 1)
+        for index in (0, 1):
+            grid.setColumnStretch(index, 1)
+            grid.setRowStretch(index, 1)
+        self._tabs.addTab(connections_tab, "Connections")
         self.performance_pages = QTabWidget()
         self.performance_pages.addTab(
             PerformanceTab(self.client_performance, local="client", remote="server"),
@@ -174,25 +203,6 @@ class MainWindow(QMainWindow):
         self.servers_dock.setWidget(self.discovery_panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
 
-        self.connection_log = QPlainTextEdit(self)
-        self.connection_log.setReadOnly(True)
-        self.connection_log.setMaximumBlockCount(1000)
-        self.get_log_button = QPushButton("Get server log")
-        self.get_log_button.setToolTip(
-            "Ask the server shown in the current tab to send its debug log"
-        )
-        self.get_log_button.clicked.connect(self._request_server_log)
-        self.get_client_log_button = QPushButton("Get client log")
-        self.get_client_log_button.setToolTip(
-            "Ask the most recently connected viewer of this computer to send its debug log"
-        )
-        self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
-        log_tab = QWidget()
-        log_layout = QVBoxLayout(log_tab)
-        log_layout.addWidget(self.get_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        log_layout.addWidget(self.get_client_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        log_layout.addWidget(self.connection_log)
-        self._tabs.addTab(log_tab, "Connection log")
         self.preferences_tab = PreferencesTab(
             self._settings,
             [self.client_performance, self.server_performance],
@@ -200,6 +210,10 @@ class MainWindow(QMainWindow):
             clipboard=self._clipboard,
         )
         self.preferences_tab.statusMessage.connect(self.log)
+        # Preferences drives the sharing lifecycle (the three-state choice
+        # lives there); SharingTab owns persistence and the ShareServer.
+        self.preferences_tab.sharingModeChanged.connect(self.sharing_tab.set_mode)
+        self.preferences_tab.restart_button.clicked.connect(self._restart_app)
         self._tabs.addTab(self.preferences_tab, "Preferences")
         self._about_tab = AboutTab()
         self._tabs.addTab(self._about_tab, "About")
