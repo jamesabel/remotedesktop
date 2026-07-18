@@ -160,8 +160,14 @@ class DiscoveryPanel(QWidget):
         found = ", ".join(f"{s.name} at {s.host}:{s.port}" for s in servers)
         self.status.emit(f"Scan finished — found: {found}" if servers else "Scan finished — no servers found")
 
+    def _item_is_self(self, item: QListWidgetItem) -> bool:
+        server = item.data(Qt.ItemDataRole.UserRole)
+        return self._is_self is not None and self._is_self(server)
+
     def _on_selection_changed(self) -> None:
-        self.connect_button.setEnabled(self.server_list.currentItem() is not None)
+        item = self.server_list.currentItem()
+        # A computer cannot connect to itself.
+        self.connect_button.setEnabled(item is not None and not self._item_is_self(item))
 
     def _on_connect_clicked(self) -> None:
         item = self.server_list.currentItem()
@@ -173,10 +179,14 @@ class DiscoveryPanel(QWidget):
         if item is None:
             return
         menu = QMenu(self)
-        menu.addAction("Connect", lambda: self._on_item_activated(item))
+        connect_action = menu.addAction("Connect", lambda: self._on_item_activated(item))
+        connect_action.setEnabled(not self._item_is_self(item))
         menu.exec(self.server_list.mapToGlobal(pos))
 
     def _on_item_activated(self, item: QListWidgetItem) -> None:
+        if self._item_is_self(item):
+            self.status.emit("This computer cannot connect to itself")
+            return
         self.serverActivated.emit(item.data(Qt.ItemDataRole.UserRole))
 
 

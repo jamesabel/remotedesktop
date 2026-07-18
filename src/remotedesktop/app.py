@@ -126,12 +126,17 @@ class MainWindow(QMainWindow):
         self.sharing_tab.viewerCountChanged.connect(self._update_sharing_indicator)
 
         # One tab per server connection (inserted at the front, closable),
-        # followed by the fixed tabs, which never get a close button.
+        # followed by the fixed tabs, which never get a close button. While
+        # no session exists, a placeholder "Server" tab holds instructions;
+        # the first connection takes its place (and its position), and it
+        # returns when the last session closes.
         self._sessions: list[ServerSession] = []
         self._tabs = QTabWidget()
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.currentChanged.connect(self._on_current_tab_changed)
+        self._no_session_page = self._build_no_session_page()
+        self._tabs.addTab(self._no_session_page, "Server")
         # One "Connections" tab holds everything connection-related in a 2×2
         # grid: sharing status + viewers, both peer inventories, and the
         # connection log.
@@ -169,10 +174,12 @@ class MainWindow(QMainWindow):
         log_buttons.addStretch(1)
         log_layout.addLayout(log_buttons)
         log_layout.addWidget(self.connection_log)
+        # Left column: this computer (sharing status, log). Right column:
+        # the LAN peer tables.
         grid.addWidget(sharing_group, 0, 0)
+        grid.addWidget(log_group, 1, 0)
         grid.addWidget(servers_group, 0, 1)
-        grid.addWidget(clients_group, 1, 0)
-        grid.addWidget(log_group, 1, 1)
+        grid.addWidget(clients_group, 1, 1)
         for index in (0, 1):
             grid.setColumnStretch(index, 1)
             grid.setRowStretch(index, 1)
@@ -313,6 +320,39 @@ class MainWindow(QMainWindow):
             self.fullscreen_action,
         ):
             self.addAction(action)
+
+    @staticmethod
+    def _build_no_session_page() -> QWidget:
+        page = QWidget()
+        label = QLabel(
+            "<h3>No server connected</h3>"
+            "<p>Computers sharing their screen appear automatically in the "
+            "<b>Servers</b> panel on the left<br>(View&nbsp;▸&nbsp;Servers "
+            "panel if it is hidden).</p>"
+            "<p>Double-click one — or select it and click <b>Connect</b> — "
+            "and this tab becomes your view of that computer.</p>"
+            "<p>To make a computer appear in the list, turn on "
+            "<b>Screen sharing</b> in the Preferences tab on that computer.</p>"
+        )
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        layout = QVBoxLayout(page)
+        layout.addStretch(1)
+        layout.addWidget(label)
+        layout.addStretch(1)
+        return page
+
+    def _strip_tab_buttons(self, index: int) -> None:
+        bar = self._tabs.tabBar()
+        for side in (QTabBar.ButtonPosition.LeftSide, QTabBar.ButtonPosition.RightSide):
+            bar.setTabButton(index, side, None)
+
+    def _ensure_placeholder(self) -> None:
+        """Re-show the "Server" instructions tab once no session remains."""
+        if self._sessions or self._tabs.indexOf(self._no_session_page) != -1:
+            return
+        self._tabs.insertTab(0, self._no_session_page, "Server")
+        self._strip_tab_buttons(0)  # a fresh insert grows new close buttons
 
     def _on_current_tab_changed(self, _index: int) -> None:
         self._refresh_status_bar()
@@ -664,6 +704,11 @@ class MainWindow(QMainWindow):
             )
 
     def _on_server_activated(self, server: ServerInfo) -> None:
+        if self._is_own_server(server):
+            # Viewing your own screen through yourself is a hall of mirrors;
+            # the panel already blocks this, but guard the entry point too.
+            self.log("This computer cannot connect to itself")
+            return
         key = f"{server.host}:{server.port}"
         session = self._session_for_key(key)
         if session is not None and session.connected:
@@ -708,6 +753,10 @@ class MainWindow(QMainWindow):
         client.logReceived.connect(lambda text, s=session: self._show_server_log(s.name, text))
         client.connectionFailed.connect(lambda _reason, s=session: self._schedule_reconnect(s))
         self._sessions.append(session)
+        placeholder_index = self._tabs.indexOf(self._no_session_page)
+        if placeholder_index != -1:
+            # The first session takes the placeholder's place and position.
+            self._tabs.removeTab(placeholder_index)
         self._tabs.insertTab(len(self._sessions) - 1, page, session.name)
         return session
 
@@ -742,8 +791,12 @@ class MainWindow(QMainWindow):
         session.auto_reconnect = False
         session.client.close()  # a synchronous disconnect signal may fire here
         index = self._sessions.index(session)
+        was_current = self._tabs.currentWidget() is session.page
         self._sessions.pop(index)
         self._tabs.removeTab(index)
+        self._ensure_placeholder()
+        if was_current and not self._sessions:
+            self._tabs.setCurrentIndex(0)  # back to the instructions tab
         if session.connected and not session.denied:
             self.client_inventory.record(session.key, "disconnected", name=session.name)
         session.connected = False
