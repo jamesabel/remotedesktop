@@ -58,6 +58,9 @@ def test_window_starts_disconnected(qapp, tmp_path):
     assert "Performance" in labels and "Preferences" in labels
     assert not window.performance._timer.isActive()  # idle: no periodic work
     assert not window.windowIcon().isNull()
+    from remotedesktop import __version__
+
+    assert window.windowTitle() == f"Remote Desktop Client {__version__}"
     window.close()
 
 

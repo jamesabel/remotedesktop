@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, icon, logs, window_state
+from remotedesktop import __version__, db, icon, logs, window_state
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
@@ -93,7 +93,7 @@ class ClientWindow(QMainWindow):
         self, *, connection: sqlite3.Connection | None = None, auto_scan: bool = True
     ) -> None:
         super().__init__()
-        self.setWindowTitle("Remote Desktop Client")
+        self.setWindowTitle(f"Remote Desktop Client {__version__}")
         self.setWindowIcon(icon.app_icon("client"))
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
