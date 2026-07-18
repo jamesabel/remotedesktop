@@ -37,14 +37,15 @@ time with live statistics.
 
 ![Sharing demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/server-demo.gif)
 
-The *Sharing* tab is where an instance opts in to being shared, and shows
+The *Server* tab is where an instance opts in to being shared. It shows
 every connected viewer — who they are (login name, computer, OS) and how
 the connection is doing (bandwidth, round-trip time with
-mean/min/max/p99/jitter over the recent window).
+mean/min/max/p99/jitter over the recent window) — along with the history
+of servers seen and clients paired, with one-click *Forget* / *Revoke*.
 
 ## Features
 
-- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is an opt-in checkbox on the *Sharing* tab, and only one instance runs per computer (launching it again just raises the existing window).
+- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is an opt-in checkbox on the *Server* tab, and only one instance runs per computer (launching it again just raises the existing window).
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type.
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
@@ -79,7 +80,7 @@ it prepares the environment on first use and launches the app.
 ## Quick start
 
 1. Run `remotedesktop` on both computers.
-2. On the computer to share, open the *Sharing* tab and tick
+2. On the computer to share, open the *Server* tab and tick
    *Share this computer's screen on the LAN*.
 3. On the viewing computer, the shared computer appears in the *Servers*
    panel — double-click it.
@@ -100,7 +101,7 @@ certificates are trusted on first use and a changed fingerprint is logged
 rather than blocking the connection, favoring reliable reconnection over
 strict certificate checking. Unapproved clients are limited to small
 handshake messages until the user at the shared computer admits them;
-access can be revoked at any time from the *Clients on LAN* tab. There is
+access can be revoked at any time from the *Server* tab. There is
 no dependency
 on Windows RDP or any Microsoft-based authentication.
 
