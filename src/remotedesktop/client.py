@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import __version__, db, icon, logs, window_state
+from remotedesktop import __version__, compat, db, icon, logs, window_state
 from remotedesktop.about import AboutTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.clipboard import ClipboardSync
@@ -147,6 +147,7 @@ class ClientWindow(QMainWindow):
         self._client: ShareClient | None = None
         self._connected = False
         self._denied = False
+        self._version_mismatch = False
         self._server_name = ""
         self._server_key = ""
         self._frame_count = 0
@@ -198,6 +199,7 @@ class ClientWindow(QMainWindow):
         self._frame_count = 0
         self._connected = False
         self._denied = False
+        self._version_mismatch = False
         self.inventory.record(
             self._server_key, "attempt", name=server.name,
             address=self._server_key, detail=self._server_key,
@@ -234,13 +236,33 @@ class ClientWindow(QMainWindow):
 
     def _server_label(self) -> str:
         """The server's name with its app version when it reported one,
-        e.g. 'DEN-PC (0.19.0)'."""
+        e.g. 'DEN-PC (0.19.0)' — flagged when its major version differs."""
         version = self._client.server_app_version if self._client is not None else ""
-        return f"{self._server_name} ({version})" if version else self._server_name
+        if not version:
+            return self._server_name
+        marker = " ⚠ VERSION MISMATCH" if self._version_mismatch else ""
+        return f"{self._server_name} ({version}{marker})"
 
     def _on_connected(self, server_name: str) -> None:
         self._server_name = server_name or self._server_name
         self._connected = True
+        # Semver policy: matching majors are the compatibility contract. A
+        # mismatch warns loudly (log, dialog, status bar) but never blocks —
+        # the user may still try, with no guarantees.
+        server_version = self._client.server_app_version if self._client is not None else ""
+        warning = compat.mismatch_warning(__version__, server_version, "server")
+        self._version_mismatch = warning is not None
+        if warning:
+            self.log(warning)
+            box = QMessageBox(
+                QMessageBox.Icon.Warning,
+                "Version mismatch",
+                warning,
+                QMessageBox.StandardButton.Ok,
+                self,
+            )
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            box.show()  # non-modal: streaming continues behind it
         self.inventory.record(self._server_key, "connected", name=self._server_name)
         self.viewer.setFocus()
         self.statusBar().showMessage(

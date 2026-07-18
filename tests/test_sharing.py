@@ -47,6 +47,32 @@ def make_client(tmp_path, *, clipboard=None, log_provider=None):
     )
 
 
+def test_server_status_reports_version_mismatch(qapp, credentials, tmp_path, monkeypatch):
+    # Both ends share this process's __version__, so a real mismatch can't
+    # occur here; patch the policy function to prove the hello wiring emits
+    # its warning into the status log (and never blocks the connection).
+    from remotedesktop import sharing
+
+    monkeypatch.setattr(
+        sharing.compat,
+        "mismatch_warning",
+        lambda mine, theirs, peer: f"WARNING: version mismatch — test ({peer} {theirs})",
+    )
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    statuses = []
+    server.status.connect(statuses.append)
+    client = make_client(tmp_path)
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)  # still admitted despite the warning
+        assert any("WARNING: version mismatch" in s for s in statuses)
+    finally:
+        client.close()
+        server.close()
+
+
 def test_first_connection_prompts_pairs_and_streams(qapp, credentials, tmp_path):
     prompts = []
     server = make_server(
