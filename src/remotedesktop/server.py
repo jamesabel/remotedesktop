@@ -3,10 +3,10 @@
 `SharingTab` is where an instance opts in to being a server: a checkbox
 starts/stops sharing this computer's screen on the LAN. It owns the
 `ShareServer` and `DiscoveryResponder` lifecycle — both exist only while
-sharing is enabled — and shows who is viewing (`ViewersTable`), the
-autostart-at-login option, and the app restart button. The opt-in persists
-in the settings table (`server_enabled`), so an instance that shared keeps
-sharing on the next start.
+sharing is enabled — and shows who is viewing (`ViewersTable`) and the app
+restart button. The opt-in persists in the settings table
+(`server_enabled`), so an instance that shared keeps sharing on the next
+start.
 """
 
 import logging
@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import __version__, compat, tls
-from remotedesktop.autostart import Autostart
 from remotedesktop.config import PairedClients, Settings, default_config_dir
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
@@ -172,7 +171,6 @@ class SharingTab(QWidget):
         performance: PerformanceMonitor,
         clipboard=None,
         credentials: tuple | None = None,
-        autostart: Autostart | None = None,
         discovery_port: int = DISCOVERY_PORT,
         connect_port: int = DEFAULT_CONNECT_PORT,
         parent: QWidget | None = None,
@@ -187,7 +185,6 @@ class SharingTab(QWidget):
         self._connect_port = connect_port
         self._paired = PairedClients(connection)
         self._name = socket.gethostname()
-        self._autostart = autostart if autostart is not None else Autostart()
 
         self.share_server: ShareServer | None = None
         self.responder: DiscoveryResponder | None = None
@@ -197,10 +194,6 @@ class SharingTab(QWidget):
         self.share_checkbox = QCheckBox("Share this computer's screen on the LAN")
         self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.viewers_table = ViewersTable(performance)
-        self.autostart_checkbox = QCheckBox("Start Remote Desktop when I log in to Windows")
-        self.autostart_checkbox.setChecked(self._autostart.is_enabled())
-        self.autostart_checkbox.setEnabled(self._autostart.available)
-        self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
         self.restart_button = QPushButton("Restart app")
         self.restart_button.setToolTip(
             "Relaunch this app (e.g. after updating the software). It can be "
@@ -212,7 +205,6 @@ class SharingTab(QWidget):
         layout.addWidget(self.share_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._summary)
         layout.addWidget(self.viewers_table, stretch=1)
-        layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Restore the persisted opt-in state (checkbox only). The host window
@@ -329,14 +321,6 @@ class SharingTab(QWidget):
             else "Sharing enabled — no viewers connected"
         )
         self._summary.setText(f"{discoverable}\n{sharing}")
-
-    def _on_autostart_toggled(self, checked: bool) -> None:
-        self._autostart.set_enabled(checked)
-        self.statusMessage.emit(
-            "Remote Desktop will start at login"
-            if checked
-            else "Remote Desktop will no longer start at login"
-        )
 
     def revoke_client(self, client_id: str) -> None:
         """Revoke a client's pairing, whether or not sharing is running."""

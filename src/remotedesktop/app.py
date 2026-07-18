@@ -98,7 +98,6 @@ class MainWindow(QMainWindow):
             performance=self.server_performance,
             clipboard=self._clipboard,
             credentials=credentials,
-            autostart=autostart,
             discovery_port=discovery_port,
             connect_port=connect_port,
         )
@@ -171,10 +170,13 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.get_client_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
         log_layout.addWidget(self.connection_log)
         self._tabs.addTab(log_tab, "Connection log")
-        self._tabs.addTab(
-            PreferencesTab(self._settings, [self.client_performance, self.server_performance]),
-            "Preferences",
+        self.preferences_tab = PreferencesTab(
+            self._settings,
+            [self.client_performance, self.server_performance],
+            autostart=autostart,
         )
+        self.preferences_tab.statusMessage.connect(self.log)
+        self._tabs.addTab(self.preferences_tab, "Preferences")
         self._tabs.addTab(AboutTab(), "About")
         # Only session tabs are closable; strip the buttons the fixed tabs
         # got from setTabsClosable (styles place them on either side).

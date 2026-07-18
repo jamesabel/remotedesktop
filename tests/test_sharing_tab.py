@@ -7,7 +7,6 @@ from PySide6.QtNetwork import QHostAddress, QTcpServer
 from PySide6.QtWidgets import QMessageBox
 
 from remotedesktop import db
-from remotedesktop.autostart import Autostart
 from remotedesktop.config import KnownServers, Settings
 from remotedesktop.inventory import ConnectionInventory
 from remotedesktop.performance import PerformanceMonitor
@@ -41,7 +40,6 @@ def make_tab(credentials, tmp_path, *, discovery_port=None, connect_port=0, enab
         connection=connection,
         performance=PerformanceMonitor(),
         credentials=credentials,  # always injected: never create real cert files
-        autostart=Autostart(key_path=_TEST_AUTOSTART_KEY, value_name="tab-test"),
         discovery_port=discovery_port if discovery_port is not None else free_udp_port(),
         connect_port=connect_port,
     )
@@ -187,19 +185,6 @@ def test_connect_port_conflict_is_reported(qapp, credentials, tmp_path):
             tab.shutdown()
     finally:
         blocker.close()
-
-
-def test_autostart_checkbox_toggles_registration(qapp, credentials, tmp_path):
-    tab = make_tab(credentials, tmp_path, enabled=False)
-    try:
-        assert not tab._autostart.is_enabled()
-        tab.autostart_checkbox.setChecked(True)
-        assert tab._autostart.is_enabled()
-        assert any("start at login" in m for m in tab.messages)
-        tab.autostart_checkbox.setChecked(False)
-        assert not tab._autostart.is_enabled()
-    finally:
-        tab.shutdown()
 
 
 def test_get_client_log_needs_sharing_and_a_client(qapp, credentials, tmp_path):
