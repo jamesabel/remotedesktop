@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtCore import Qt
 
 from remotedesktop import db
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
@@ -92,13 +93,15 @@ def test_inventory_tab_rows_have_their_own_action_button(qapp):
     inv.record("client-43", "connected", name="Carol")
     acted = []
     tab = InventoryTab(inv, "Revoke", acted.append)
-    from PySide6.QtCore import Qt
+
+    def row_key(row: int) -> str:
+        item = tab._table.item(row, 0)
+        assert item is not None
+        return item.data(Qt.ItemDataRole.UserRole)
 
     # Each row's button acts on that row's peer, whatever the sort order
     # (last_seen has second resolution, so same-second rows tie).
-    row_keys = [
-        tab._table.item(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(2)
-    ]
+    row_keys = [row_key(row) for row in range(2)]
     assert sorted(row_keys) == ["client-42", "client-43"]
     first, second = tab._row_button(0), tab._row_button(1)
     assert first is not None and second is not None
