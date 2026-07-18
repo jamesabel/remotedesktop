@@ -676,6 +676,10 @@ class ShareClient(QObject):
     approvalPending = Signal()  # server is asking its user for permission
     denied = Signal(str)  # reason
     disconnected = Signal()
+    # A connect attempt failed before a connection was established (refused,
+    # unreachable, timeout). `disconnected` does NOT fire in that case — Qt
+    # emits it only for sockets that actually reached ConnectedState.
+    connectionFailed = Signal(str)
     frameReceived = Signal(QImage)
     status = Signal(str)
     logReceived = Signal(str)  # server log text answering request_log
@@ -718,9 +722,7 @@ class ShareClient(QObject):
         self._socket.encrypted.connect(self._on_encrypted)
         self._socket.sslErrors.connect(self._on_ssl_errors)
         self._socket.disconnected.connect(self._on_disconnected)
-        self._socket.errorOccurred.connect(
-            lambda _error: self.status.emit(f"Socket error: {self._socket.errorString()}")
-        )
+        self._socket.errorOccurred.connect(self._on_error)
         self._stream.jsonReceived.connect(self._on_message)
         self._stream.frameReceived.connect(self._on_frame)
         self._stream.deltaReceived.connect(self._on_delta)
@@ -760,6 +762,14 @@ class ShareClient(QObject):
             return
         self.status.emit("Requesting the server's log")
         self._stream.send_json({"type": "log_request"})
+
+    def _on_error(self, _error) -> None:
+        self.status.emit(f"Socket error: {self._socket.errorString()}")
+        # Back in UnconnectedState at error time means the attempt never
+        # produced a connection, so no `disconnected` will follow — report
+        # the failure explicitly (auto-reconnect hangs off this).
+        if self._socket.state() == QSslSocket.SocketState.UnconnectedState:
+            self.connectionFailed.emit(self._socket.errorString())
 
     def _on_ssl_errors(self, errors) -> None:
         # Self-signed server certificate is expected; identity is pinned instead.

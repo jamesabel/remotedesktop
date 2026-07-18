@@ -55,6 +55,9 @@ from remotedesktop.viewer import ViewerWidget
 
 _log = logging.getLogger("remotedesktop.app")
 
+# Auto-reconnect backoff never waits longer than this between attempts.
+_RECONNECT_CAP_SECONDS = 30.0
+
 
 class MainWindow(QMainWindow):
     def __init__(
@@ -67,8 +70,10 @@ class MainWindow(QMainWindow):
         discovery_port: int = DISCOVERY_PORT,
         connect_port: int = DEFAULT_CONNECT_PORT,
         tray_available: bool | None = None,
+        reconnect_base_seconds: float = 2.0,
     ) -> None:
         super().__init__()
+        self._reconnect_base = reconnect_base_seconds
         self.setWindowIcon(icon.app_icon("app"))
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
@@ -151,7 +156,11 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(performance_tab, "Performance")
         self.setCentralWidget(self._tabs)
 
-        self.discovery_panel = DiscoveryPanel(self, is_self=self._is_own_server)
+        # auto_scan=False (tests) never broadcasts on the LAN and starts no
+        # rescan timer; the app scans at startup and every 15 s while visible.
+        self.discovery_panel = DiscoveryPanel(
+            self, is_self=self._is_own_server, auto_scan=auto_scan
+        )
         self.servers_dock = QDockWidget("Servers", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
@@ -214,9 +223,6 @@ class MainWindow(QMainWindow):
         # Now that the log pane, tray state, and signal wiring exist, start
         # sharing if the persisted opt-in is on.
         self.sharing_tab.restore_sharing()
-        # Tests pass auto_scan=False so window tests never broadcast on the LAN.
-        if auto_scan:
-            self.discovery_panel.refresh()
 
     # ------------------------------------------------------------- logging
 
@@ -449,6 +455,7 @@ class MainWindow(QMainWindow):
                 )
             return
         for session in self._sessions:
+            self._cancel_reconnect(session)
             session.client.close()
         self.sharing_tab.shutdown()
         super().closeEvent(event)
@@ -646,11 +653,17 @@ class MainWindow(QMainWindow):
         client.disconnected.connect(lambda s=session: self._on_disconnected(s))
         client.frameReceived.connect(lambda image, s=session: self._on_frame(s, image))
         client.logReceived.connect(lambda text, s=session: self._show_server_log(s.name, text))
+        client.connectionFailed.connect(lambda _reason, s=session: self._schedule_reconnect(s))
         self._sessions.append(session)
         self._tabs.insertTab(len(self._sessions) - 1, page, session.name)
         return session
 
     def _connect_session(self, session: ServerSession, host: str, port: int) -> None:
+        session.host, session.port = host, port
+        # A manual activation resets auto-reconnect: it re-arms only once
+        # this attempt actually connects.
+        self._cancel_reconnect(session)
+        session.auto_reconnect = False
         session.frame_count = 0
         session.connected = False
         session.denied = False
@@ -672,6 +685,8 @@ class MainWindow(QMainWindow):
 
     def _close_session(self, session: ServerSession) -> None:
         """Disconnect the session and remove its tab (tab close / forget)."""
+        self._cancel_reconnect(session)
+        session.auto_reconnect = False
         session.client.close()  # a synchronous disconnect signal may fire here
         index = self._sessions.index(session)
         self._sessions.pop(index)
@@ -716,6 +731,9 @@ class MainWindow(QMainWindow):
         session.name = server_name or session.name
         self._tabs.setTabText(self._sessions.index(session), session.name)
         session.connected = True
+        # A live connection arms auto-reconnect and resets its backoff.
+        self._cancel_reconnect(session)
+        session.auto_reconnect = True
         # Semver policy: matching majors are the compatibility contract. A
         # mismatch warns loudly (log, dialog, status bar) but never blocks —
         # the user may still try, with no guarantees.
@@ -752,6 +770,10 @@ class MainWindow(QMainWindow):
             return
         session.connected = False
         session.denied = True
+        # A denial is authoritative: no automatic retry until the user
+        # activates the server again.
+        self._cancel_reconnect(session)
+        session.auto_reconnect = False
         self.client_inventory.record(session.key, "denied", name=session.name)
         session.viewer.clear(f"Connection denied: {reason}")
         self._set_session_status(session, f"Denied by {session.name}: {reason}")
@@ -768,6 +790,64 @@ class MainWindow(QMainWindow):
             session.viewer.clear("Disconnected")
             self._set_session_status(session, f"Disconnected from {session.name}")
         self._update_window_title()
+        if session.auto_reconnect and not session.denied and not self._quitting:
+            self._schedule_reconnect(session)
+
+    def _schedule_reconnect(self, session: ServerSession) -> None:
+        """Queue an auto-reconnect attempt with exponential backoff.
+
+        The active-timer guard also dedupes the errorOccurred+disconnected
+        double-fire a remote-host-closed produces.
+        """
+        if (
+            session not in self._sessions
+            or not session.auto_reconnect
+            or session.denied
+            or session.connected
+            or self._quitting
+            or (session.reconnect_timer is not None and session.reconnect_timer.isActive())
+        ):
+            return
+        session.reconnect_attempts += 1
+        delay = min(
+            _RECONNECT_CAP_SECONDS,
+            self._reconnect_base * 2 ** (session.reconnect_attempts - 1),
+        )
+        timer = session.reconnect_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda s=session: self._attempt_reconnect(s))
+            session.reconnect_timer = timer
+        timer.start(round(delay * 1000))
+        message = (
+            f"Connection lost — reconnecting in {delay:.0f} s … "
+            f"(attempt {session.reconnect_attempts})"
+        )
+        session.viewer.clear(message)
+        self._set_session_status(session, f"{session.name}: {message}")
+        self.log(f"[{session.name}] {message}")
+
+    def _attempt_reconnect(self, session: ServerSession) -> None:
+        if (
+            session not in self._sessions
+            or session.connected
+            or session.denied
+            or self._quitting
+        ):
+            return
+        # Deliberately not _connect_session: no performance reset, no tab
+        # steal, no inventory "attempt" spam — just the wire attempt. The
+        # stored token makes a successful reconnect promptless.
+        self._set_session_status(
+            session, f"Reconnecting to {session.name} … (attempt {session.reconnect_attempts})"
+        )
+        session.client.connect_to(session.host, session.port)
+
+    def _cancel_reconnect(self, session: ServerSession) -> None:
+        if session.reconnect_timer is not None:
+            session.reconnect_timer.stop()
+        session.reconnect_attempts = 0
 
     def _request_server_log(self) -> None:
         session = self._session_for_page(self._tabs.currentWidget())

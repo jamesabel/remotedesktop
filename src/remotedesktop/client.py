@@ -10,10 +10,13 @@ import logging
 import threading
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -27,8 +30,33 @@ from remotedesktop.viewer import ViewerWidget
 _log = logging.getLogger("remotedesktop.client")
 
 
+class _ServerList(QListWidget):
+    """Server list that paints a hint while empty."""
+
+    placeholder_text = (
+        "No servers found yet — tick \"Share this computer's screen\" "
+        "on the computer to share"
+    )
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.count() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(Qt.GlobalColor.gray)
+            painter.drawText(
+                self.viewport().rect().adjusted(12, 12, -12, -12),
+                int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
+                self.placeholder_text,
+            )
+
+
 class DiscoveryPanel(QWidget):
     """Scans the LAN for servers and lists them for the user to pick.
+
+    With `auto_scan` the panel scans once at startup and rescans on a timer
+    (skipped while a scan is in flight or the panel is not visible), so the
+    list stays current without manual refreshes. Tests construct the panel
+    with the default `auto_scan=False`, which never broadcasts on the LAN.
 
     `is_self` (optional) marks entries that are this very instance's own
     server — sharing and scanning in one app means you discover yourself —
@@ -45,23 +73,53 @@ class DiscoveryPanel(QWidget):
         parent: QWidget | None = None,
         *,
         is_self: Callable[[ServerInfo], bool] | None = None,
+        auto_scan: bool = False,
+        rescan_interval_ms: int = 15000,
     ) -> None:
         super().__init__(parent)
         self._is_self = is_self
+        self._scanning = False
         self._refresh_button = QPushButton("Refresh")
-        self.server_list = QListWidget()
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.setEnabled(False)  # needs a selection
+        self.server_list = _ServerList()
+        buttons = QHBoxLayout()
+        buttons.addWidget(self._refresh_button)
+        buttons.addWidget(self.connect_button)
         layout = QVBoxLayout(self)
-        layout.addWidget(self._refresh_button)
+        layout.addLayout(buttons)
         layout.addWidget(self.server_list)
         self._refresh_button.clicked.connect(self.refresh)
+        self.connect_button.clicked.connect(self._on_connect_clicked)
         self.server_list.itemActivated.connect(self._on_item_activated)
+        self.server_list.itemSelectionChanged.connect(self._on_selection_changed)
+        self.server_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.server_list.customContextMenuRequested.connect(self._on_context_menu)
         self._scanFinished.connect(self._show_results)
+        self._rescan_timer: QTimer | None = None
+        if auto_scan:
+            # Deferred so the host window can wire status/serversFound first.
+            QTimer.singleShot(0, self.refresh)
+            self._rescan_timer = QTimer(self)
+            self._rescan_timer.setInterval(rescan_interval_ms)
+            self._rescan_timer.timeout.connect(self._auto_refresh)
+            self._rescan_timer.start()
 
     def refresh(self) -> None:
+        if self._scanning:
+            return  # a scan is already in flight (F5 while scanning)
+        self._scanning = True
         self._refresh_button.setEnabled(False)
         self._refresh_button.setText("Scanning…")
         self.status.emit(f"Scanning LAN (UDP broadcast to port {DISCOVERY_PORT}) …")
         threading.Thread(target=self._scan, name="discovery-scan", daemon=True).start()
+
+    def _auto_refresh(self) -> None:
+        # No point broadcasting while nobody can see the results (panel
+        # closed, or the window is hidden in the tray).
+        if self._scanning or not self.isVisible():
+            return
+        self.refresh()
 
     def _scan(self) -> None:
         # Runs on a worker thread; the signal is delivered queued on the GUI
@@ -73,9 +131,17 @@ class DiscoveryPanel(QWidget):
             pass
         self._scanFinished.emit(servers)
 
+    def selected_server(self) -> ServerInfo | None:
+        item = self.server_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
     def _show_results(self, servers: list) -> None:
+        self._scanning = False
         self._refresh_button.setEnabled(True)
         self._refresh_button.setText("Refresh")
+        # An auto-rescan must not wipe the user's selection out from under
+        # the Connect button: reselect the same server after repopulating.
+        selected = self.selected_server()
         self.server_list.clear()
         for server in servers:
             label = f"{server.name} ({server.host}:{server.port})"
@@ -84,9 +150,31 @@ class DiscoveryPanel(QWidget):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, server)
             self.server_list.addItem(item)
+            if (
+                selected is not None
+                and server.host == selected.host
+                and server.port == selected.port
+            ):
+                self.server_list.setCurrentItem(item)
         self.serversFound.emit(servers)
         found = ", ".join(f"{s.name} at {s.host}:{s.port}" for s in servers)
         self.status.emit(f"Scan finished — found: {found}" if servers else "Scan finished — no servers found")
+
+    def _on_selection_changed(self) -> None:
+        self.connect_button.setEnabled(self.server_list.currentItem() is not None)
+
+    def _on_connect_clicked(self) -> None:
+        item = self.server_list.currentItem()
+        if item is not None:
+            self._on_item_activated(item)
+
+    def _on_context_menu(self, pos) -> None:
+        item = self.server_list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Connect", lambda: self._on_item_activated(item))
+        menu.exec(self.server_list.mapToGlobal(pos))
 
     def _on_item_activated(self, item: QListWidgetItem) -> None:
         self.serverActivated.emit(item.data(Qt.ItemDataRole.UserRole))
@@ -116,5 +204,12 @@ class ServerSession:
         self.denied = False
         self.version_mismatch = False
         self.frame_count = 0
+        # Auto-reconnect state: armed by a successful connect, driven by the
+        # window's backoff timer, cancelled by denial/close/manual activation.
+        self.host = ""
+        self.port = 0
+        self.auto_reconnect = False
+        self.reconnect_attempts = 0
+        self.reconnect_timer: QTimer | None = None
         # What the status bar shows while this session's tab is current.
         self.status_text = ""

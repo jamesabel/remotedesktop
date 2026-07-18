@@ -24,7 +24,7 @@ _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 
 def make_window(
     tmp_path, credentials=None, *, serving=False, tray_available=False,
-    db_name="app.db", discovery_port=None,
+    db_name="app.db", discovery_port=None, reconnect_base_seconds=2.0,
 ):
     """A MainWindow on a temp DB with everything injected.
 
@@ -44,6 +44,7 @@ def make_window(
         discovery_port=discovery_port if discovery_port is not None else free_udp_port(),
         connect_port=0,
         tray_available=tray_available,
+        reconnect_base_seconds=reconnect_base_seconds,
     )
 
 
@@ -707,3 +708,139 @@ def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
     finally:
         window.close()
         server.close()
+
+
+def test_auto_reconnect_recovers_after_server_restart(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    port = server.port
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        assert session.auto_reconnect
+
+        server.close()
+        pump(qapp, lambda: "reconnecting" in session.status_text.lower())
+        assert session.reconnect_attempts >= 1
+
+        # The server comes back on the same port: the stored token makes the
+        # reconnect promptless, and the backoff counter resets.
+        replacement = ShareServer(
+            approve_client=lambda *_: True,
+            credentials=credentials,
+            paired=PairedClients(db.connect(tmp_path / "server.db")),
+        )
+        assert replacement.listen(port)
+        try:
+            pump(qapp, lambda: session.connected, timeout=15.0)
+            assert session.reconnect_attempts == 0
+            pump(qapp, lambda: session.viewer.has_frame)
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_auto_reconnect_backs_off_while_server_stays_down(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        server.close()
+        # Repeated failures keep retrying with doubling delays.
+        pump(qapp, lambda: session.reconnect_attempts >= 3, timeout=15.0)
+        assert not session.connected
+    finally:
+        window.close()
+        server.close()
+
+
+def test_denial_stops_auto_reconnect(qapp, credentials, tmp_path, monkeypatch):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+
+        # Revoke this window's own client identity (a per-DB UUID).
+        server.revoke_client(window._identity[0])
+        pump(qapp, lambda: session.denied)
+        pump(qapp, lambda: True, timeout=0.5)  # give a wrong retry time to fire
+        assert not session.auto_reconnect
+        assert session.reconnect_attempts == 0
+        assert session.reconnect_timer is None or not session.reconnect_timer.isActive()
+        assert "Denied" in window.statusBar().currentMessage() or session.denied
+    finally:
+        window.close()
+        server.close()
+
+
+def test_closing_the_tab_stops_auto_reconnect(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        server.close()
+        pump(qapp, lambda: "reconnecting" in session.status_text.lower())
+        window._on_tab_close_requested(0)
+        assert window._sessions == []
+        assert session.reconnect_timer is None or not session.reconnect_timer.isActive()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_discovery_panel_auto_rescans_while_visible(qapp, monkeypatch):
+    scans = []
+    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    panel = DiscoveryPanel(auto_scan=True, rescan_interval_ms=30)
+    panel.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    panel.show()
+    try:
+        pump(qapp, lambda: len(scans) >= 3)  # initial + timer rescans
+    finally:
+        panel.close()
+
+
+def test_discovery_panel_skips_rescans_while_hidden_or_scanning(qapp, monkeypatch):
+    scans = []
+    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    panel = DiscoveryPanel(auto_scan=True, rescan_interval_ms=30)
+    try:
+        # Never shown: only the initial startup scan runs.
+        pump(qapp, lambda: len(scans) == 1)
+        pump(qapp, lambda: True, timeout=0.3)
+        assert len(scans) == 1
+        # And an in-flight scan suppresses another one.
+        panel._scanning = True
+        panel._auto_refresh()
+        assert len(scans) == 1
+        panel._scanning = False
+    finally:
+        panel.close()
+
+
+def test_discovery_panel_connect_button_and_selection_preservation(qapp):
+    panel = DiscoveryPanel()
+    activated = []
+    panel.serverActivated.connect(activated.append)
+    first = ServerInfo(name="A", host="10.0.0.1", port=1111)
+    second = ServerInfo(name="B", host="10.0.0.2", port=2222)
+    assert not panel.connect_button.isEnabled()
+    assert panel.server_list.placeholder_text  # empty-state hint exists
+
+    panel._show_results([first, second])
+    panel.server_list.setCurrentRow(1)
+    assert panel.connect_button.isEnabled()
+    # A background rescan repopulates the list without losing the selection.
+    panel._show_results([first, second])
+    assert panel.selected_server() == second
+    panel.connect_button.click()
+    assert activated == [second]
