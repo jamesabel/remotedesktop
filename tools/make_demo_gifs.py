@@ -38,8 +38,9 @@ from remotedesktop import client as client_module
 
 SCREEN_W, SCREEN_H = 1280, 800
 GIF_WIDTH = 900
-CAPTURE_INTERVAL = 0.15  # seconds per frame, also the GIF frame duration
-TOTAL_SECONDS = 11.0
+CAPTURE_INTERVAL = 0.18  # seconds per frame, also the GIF frame duration
+TOTAL_SECONDS = 26.5
+_GIF_COLORS = 96  # adaptive-palette size; the UI + fake desktop quantize well
 _CODE_LINES = [
     "def changed_bands(previous, current):",
     '    """Bands of `current` that differ from `previous`."""',
@@ -190,7 +191,9 @@ def to_gif_frame(window) -> Image.Image:
 
 
 def save_gif(frames: list[Image.Image], path: Path) -> None:
-    quantized = [f.convert("P", palette=Image.Palette.ADAPTIVE, colors=128) for f in frames]
+    quantized = [
+        f.convert("P", palette=Image.Palette.ADAPTIVE, colors=_GIF_COLORS) for f in frames
+    ]
     quantized[0].save(
         path,
         save_all=True,
@@ -251,13 +254,16 @@ def main() -> None:
         server_tabs = server_window.centralWidget()
         assert isinstance(client_tabs, QTabWidget) and isinstance(server_tabs, QTabWidget)
 
+        # The live remote-screen section is the product's whole point, so it
+        # gets the lion's share of the runtime (~19 s of streaming before
+        # the brief Performance-tab detour, plus the closing shot).
         script = [
             (0.8, lambda: client_window.discovery_panel.refresh()),
             (2.0, lambda: client_window.discovery_panel.serverActivated.emit(info)),
-            (6.8, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Performance"))),
-            (7.2, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Performance"))),
-            (9.2, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Remote Screen"))),
-            (9.6, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Status"))),
+            (21.2, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Performance"))),
+            (21.6, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Performance"))),
+            (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Remote Screen"))),
+            (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Status"))),
         ]
         client_frames: list[Image.Image] = []
         server_frames: list[Image.Image] = []
