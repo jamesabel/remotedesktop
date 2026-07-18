@@ -302,7 +302,8 @@ def test_forget_server_disconnects_and_forgets(qapp, credentials, tmp_path, monk
         window._forget_server(key)
         assert window._sessions == []  # the session tab went with it
         assert window._known_servers.get(key) is None
-        assert window.client_inventory._peers[key].state == "forgotten"
+        # Forgotten servers vanish from the inventory instead of lingering.
+        assert key not in window.client_inventory._peers
 
         # Answering "No" leaves a known server alone.
         monkeypatch.setattr(

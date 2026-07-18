@@ -47,6 +47,35 @@ def test_inventory_counts_multiple_attempts_and_orders_recent_first(qapp):
     assert by_key["b"].attempts == 1
 
 
+def test_remove_deletes_the_peer_from_table_and_database(qapp, tmp_path):
+    path = tmp_path / "app.db"
+    inv = ConnectionInventory(db.connect(path))
+    inv.record("gone", "connected", name="Gone")
+    inv.record("kept", "connected", name="Kept")
+    changes = []
+    inv.changed.connect(lambda: changes.append(True))
+
+    inv.remove("gone")
+    assert [p.key for p in inv.peers()] == ["kept"]
+    assert changes == [True]
+    # Removing an unknown key is a silent no-op (no spurious refresh).
+    inv.remove("gone")
+    assert changes == [True]
+
+    # The deletion is persistent: a fresh inventory on the same DB agrees.
+    reopened = ConnectionInventory(db.connect(path))
+    assert [p.key for p in reopened.peers()] == ["kept"]
+
+
+def test_remove_survives_database_errors(qapp, tmp_path):
+    connection = db.connect(tmp_path / "app.db")
+    inv = ConnectionInventory(connection)
+    inv.record("peer", "connected", name="Bob")
+    connection.close()
+    inv.remove("peer")  # save fails, but the in-memory state still updates
+    assert inv.peers() == []
+
+
 def test_inventory_persists_across_restarts(qapp, tmp_path):
     path = tmp_path / "app.db"
     inv = ConnectionInventory(db.connect(path))
