@@ -276,3 +276,25 @@ def test_shortcut_override_forwards_keys_only_while_a_frame_is_shown(qapp):
     assert not override_accepted(Qt.Key.Key_F11)
     viewer.clear()
     assert not override_accepted(Qt.Key.Key_F5)
+
+
+def test_actual_size_mode_sizes_viewer_to_frame_and_maps_input_one_to_one(qapp):
+    from PySide6.QtCore import QSize
+
+    viewer = ViewerWidget()
+    viewer.set_actual_size(True)
+    viewer.show_frame(QImage(200, 100, QImage.Format.Format_RGB32))
+    dpr = viewer.devicePixelRatioF()
+    expected = QSize(round(200 / dpr), round(100 / dpr))
+    assert viewer.sizeHint() == expected
+    assert viewer.size() == expected
+    # The frame fills the widget exactly, so input maps 1:1.
+    center = viewer._normalized(QPointF(viewer.width() / 2, viewer.height() / 2))
+    assert center is not None
+    assert abs(center[0] - 0.5) < 0.01 and abs(center[1] - 0.5) < 0.01
+    # A new frame at a different resolution re-sizes the widget.
+    viewer.show_frame(QImage(300, 150, QImage.Format.Format_RGB32))
+    assert viewer.size() == QSize(round(300 / dpr), round(150 / dpr))
+    # Back to fit mode restores the minimum size.
+    viewer.set_actual_size(False)
+    assert viewer.minimumSize() == QSize(320, 240)

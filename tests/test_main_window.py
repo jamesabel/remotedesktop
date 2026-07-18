@@ -639,3 +639,71 @@ def test_refresh_action_triggers_a_scan(qapp, tmp_path, monkeypatch):
         assert scans == [True]
     finally:
         window.close()
+
+
+def test_actual_size_action_applies_per_session(qapp, credentials, tmp_path):
+    server_a = make_share_server(credentials, tmp_path, db_name="server_a.db")
+    server_b = make_share_server(credentials, tmp_path, db_name="server_b.db")
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="alpha", host="127.0.0.1", port=server_a.port))
+        window._on_server_activated(ServerInfo(name="beta", host="127.0.0.1", port=server_b.port))
+        first, second = window._sessions
+        pump(qapp, lambda: first.viewer.has_frame and second.viewer.has_frame)
+
+        # Second session'"'"'s tab is current; switch it to actual size.
+        assert window.actual_size_action.isEnabled()
+        window.actual_size_action.trigger()  # toggles checked -> True
+        assert second.actual_size
+        assert not second.page.widgetResizable()
+        assert not first.actual_size
+
+        # The action follows the current tab'"'"'s session state.
+        tabs = window.centralWidget()
+        tabs.setCurrentWidget(first.page)
+        assert not window.actual_size_action.isChecked()
+        tabs.setCurrentWidget(second.page)
+        assert window.actual_size_action.isChecked()
+        # Fixed tab: disabled and unchecked.
+        tabs.setCurrentIndex(2)
+        assert not window.actual_size_action.isEnabled()
+        assert not window.actual_size_action.isChecked()
+    finally:
+        window.close()
+        server_a.close()
+        server_b.close()
+
+
+def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window.show()
+        # Not on a session tab: F11 does nothing.
+        assert not window.fullscreen_action.isEnabled()
+        window._toggle_fullscreen()
+        assert not window.isFullScreen()
+
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        window.servers_dock.close()  # user had closed the dock beforehand
+
+        assert window.fullscreen_action.isEnabled()
+        window.fullscreen_action.trigger()
+        assert window.isFullScreen()
+        assert not window.menuBar().isVisible()
+        assert not window.statusBar().isVisible()
+        assert not window.centralWidget().tabBar().isVisible()
+        assert not window.servers_dock.isVisible()
+
+        window.fullscreen_action.trigger()
+        assert not window.isFullScreen()
+        assert window.menuBar().isVisible()
+        assert window.statusBar().isVisible()
+        assert window.centralWidget().tabBar().isVisible()
+        # The dock the user closed before fullscreen stays closed.
+        assert not window.servers_dock.isVisible()
+    finally:
+        window.close()
+        server.close()

@@ -36,6 +36,10 @@ class ViewerWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._frame: QPixmap | None = None
+        # Actual-size mode: the widget sizes itself to the frame's device
+        # pixels (its host scroll area shows scrollbars) instead of scaling
+        # the frame down to fit.
+        self._actual_size = False
         # The frame stays at the server's full resolution; what is painted is
         # a SmoothTransformation-scaled copy (proper filtering, unlike the
         # nearest-neighbor scaling of drawPixmap into a rect), cached until
@@ -58,9 +62,37 @@ class ViewerWidget(QWidget):
     def has_frame(self) -> bool:
         return self._frame is not None
 
+    def set_actual_size(self, enabled: bool) -> None:
+        """Toggle 1:1 device-pixel display (host provides the scrolling)."""
+        if self._actual_size == enabled:
+            return
+        self._actual_size = enabled
+        self._scaled = None
+        if enabled:
+            self.setMinimumSize(0, 0)
+            self._resize_to_frame()
+        else:
+            self.setMinimumSize(320, 240)
+        self.updateGeometry()
+        self.update()
+
+    def _resize_to_frame(self) -> None:
+        if self._frame is not None:
+            self.resize(self.sizeHint())
+
+    def sizeHint(self) -> QSize:
+        if self._actual_size and self._frame is not None:
+            # Logical size that maps to exactly one device pixel per frame
+            # pixel, so the paint path hits its no-resample branch.
+            dpr = self.devicePixelRatioF()
+            return QSize(round(self._frame.width() / dpr), round(self._frame.height() / dpr))
+        return super().sizeHint()
+
     def show_frame(self, image: QImage) -> None:
         self._frame = QPixmap.fromImage(image)
         self._scaled = None
+        if self._actual_size:
+            self._resize_to_frame()  # follows remote resolution changes
         self.update()
 
     def clear(self, message: str = "Not connected") -> None:
