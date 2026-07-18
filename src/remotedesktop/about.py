@@ -1,4 +1,4 @@
-"""The "About" tab, shared by the client and server windows.
+"""The "About" tab of the app window.
 
 Shows the same metadata the PyPI page shows — summary, author, license,
 Python requirement, links — read from the installed package's metadata via
@@ -17,9 +17,10 @@ _HOMEPAGE = "https://github.com/jamesabel/remotedesktop"
 _PYPI = "https://pypi.org/project/remotedesktop/"
 _FALLBACKS = {
     "Summary": (
-        "Remote desktop client/server for Windows computers on the same LAN, "
-        "with autodiscovery. Provides screen, keyboard, mouse, and clipboard "
-        "sharing without RDP or Microsoft authentication."
+        "Remote desktop app for Windows computers on the same LAN, with "
+        "autodiscovery. View other computers and optionally share this one — "
+        "screen, keyboard, mouse, and clipboard, without RDP or Microsoft "
+        "authentication."
     ),
     "Author-email": "James Abel <j@abel.co>",
     "License-Expression": "MIT",
@@ -64,7 +65,7 @@ class AboutTab(QWidget):
             Qt.TextInteractionFlag.TextBrowserInteraction
         )
         logo = QLabel()
-        logo.setPixmap(icon.app_icon("client").pixmap(48, 48))
+        logo.setPixmap(icon.app_icon("app").pixmap(48, 48))
         layout = QVBoxLayout(self)
         layout.addWidget(logo)
         layout.addWidget(body)

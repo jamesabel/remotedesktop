@@ -1,24 +1,26 @@
 import socket
 
 import remotedesktop
-from remotedesktop import db
-from remotedesktop.client import ClientWindow, DiscoveryPanel
-from remotedesktop.config import PairedClients
+from remotedesktop.client import DiscoveryPanel
 from remotedesktop.discovery import ServerInfo, discover_servers
-from remotedesktop.server import ServerWindow
 from remotedesktop.viewer import ViewerWidget
 
 from test_discovery import LOOPBACK, free_udp_port
+from test_main_window import make_window
 
 
 def test_version() -> None:
     assert remotedesktop.__version__
 
 
-def test_client_window_hosts_discovery_panel(qapp) -> None:
-    window = ClientWindow(auto_scan=False)
-    assert isinstance(window.discovery_panel, DiscoveryPanel)
-    assert window._sessions == []  # a viewer tab appears per server connection
+def test_main_window_hosts_discovery_panel(qapp, tmp_path) -> None:
+    window = make_window(tmp_path)
+    try:
+        assert isinstance(window.discovery_panel, DiscoveryPanel)
+        assert window._sessions == []  # a viewer tab appears per server connection
+        assert not window.sharing_tab.serving  # sharing is opt-in
+    finally:
+        window.close()
 
 
 def test_discovery_panel_lists_servers(qapp) -> None:
@@ -29,20 +31,15 @@ def test_discovery_panel_lists_servers(qapp) -> None:
     assert "testbox" in panel.server_list.item(0).text()
 
 
-def test_server_window_is_discoverable(qapp, credentials, tmp_path) -> None:
+def test_sharing_window_is_discoverable(qapp, credentials, tmp_path) -> None:
     port = free_udp_port()
-    window = ServerWindow(
-        discovery_port=port,
-        connect_port=0,
-        paired=PairedClients(db.connect(tmp_path / "server.db")),
-        credentials=credentials,
-    )
+    window = make_window(tmp_path, credentials, serving=True, discovery_port=port)
     try:
         servers = discover_servers(
             timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
         )
         assert [s.name for s in servers] == [socket.gethostname()]
-        assert servers[0].port == window.share_server.port
+        assert servers[0].port == window.sharing_tab.share_server.port
     finally:
         window.close()
 

@@ -1,8 +1,7 @@
 """Persist and restore top-level window geometry via the settings table.
 
-Both GUI apps save their main window's geometry (size, position, maximized
-state) on close and restore it on the next start. Each app uses its own
-settings key so a machine running both doesn't mix them up.
+The app saves its main window's geometry (size, position, maximized state)
+on close and restores it on the next start.
 """
 
 from PySide6.QtCore import QByteArray
@@ -10,8 +9,7 @@ from PySide6.QtWidgets import QWidget
 
 from remotedesktop.config import Settings
 
-CLIENT_GEOMETRY_KEY = "client_window_geometry"
-SERVER_GEOMETRY_KEY = "server_window_geometry"
+MAIN_GEOMETRY_KEY = "main_window_geometry"
 
 
 def restore_geometry(window: QWidget, settings: Settings, key: str) -> None:

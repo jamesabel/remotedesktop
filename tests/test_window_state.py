@@ -24,5 +24,5 @@ def test_restore_without_saved_geometry_leaves_window_alone(qapp):
     assert (window.width(), window.height()) == (400, 300)
 
 
-def test_client_and_server_use_distinct_keys():
-    assert window_state.CLIENT_GEOMETRY_KEY != window_state.SERVER_GEOMETRY_KEY
+def test_main_geometry_key_exists():
+    assert window_state.MAIN_GEOMETRY_KEY == "main_window_geometry"

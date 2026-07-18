@@ -1,3 +1,3 @@
 """Remote desktop client/server for Windows computers on the same LAN."""
 
-__version__ = "0.20.1"
+__version__ = "1.0.0"
