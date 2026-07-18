@@ -554,3 +554,88 @@ def test_discovery_panel_survives_scan_failure(qapp, monkeypatch):
     pump(qapp, lambda: found)
     assert found == [[]]
     assert panel._refresh_button.isEnabled()
+
+
+def _menu_actions(window, title):
+    # Never QAction.menu() here: PySide6 hands that wrapper to Python
+    # ownership, and its garbage collection deletes the real menu.
+    menus = {
+        "&File": window._file_menu,
+        "&View": window._view_menu,
+        "&Help": window._help_menu,
+    }
+    return {action.text(): action for action in menus[title].actions()}
+
+
+def test_menu_bar_quit_and_about(qapp, tmp_path, monkeypatch):
+    window = make_window(tmp_path)
+    try:
+        assert [a.text() for a in window.menuBar().actions()] == ["&File", "&View", "&Help"]
+        file_actions = _menu_actions(window, "&File")
+        assert "&Restart app…" in file_actions
+
+        _menu_actions(window, "&Help")["&About"].trigger()
+        tabs = window.centralWidget()
+        assert tabs.tabText(tabs.currentIndex()) == "About"
+
+        quits = []
+        monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+        file_actions["&Quit"].trigger()
+        assert quits == [True]
+    finally:
+        window.close()
+
+
+def test_close_tab_action_closes_only_session_tabs(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        # A fixed tab is current at startup: the action is disabled and inert.
+        assert not window.close_tab_action.isEnabled()
+        window.close_tab_action.trigger()
+        assert window._sessions == []
+
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window._sessions[0].connected)
+        assert window.close_tab_action.isEnabled()  # session tab became current
+        window.close_tab_action.trigger()
+        assert window._sessions == []
+        assert not window.close_tab_action.isEnabled()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
+    window = make_window(tmp_path)
+    try:
+        window.show()
+        assert window.servers_dock.isVisible()
+        window.servers_dock.close()
+        assert not window.servers_dock.isVisible()
+        # The View menu toggle is the way back.
+        _menu_actions(window, "&View")["&Servers panel"].trigger()
+        assert window.servers_dock.isVisible()
+        # Close it again; the layout persists to the next start (same DB).
+        window.servers_dock.close()
+    finally:
+        window.close()
+
+    reopened = make_window(tmp_path)
+    try:
+        reopened.show()
+        assert not reopened.servers_dock.isVisible()
+    finally:
+        reopened.close()
+
+
+def test_refresh_action_triggers_a_scan(qapp, tmp_path, monkeypatch):
+    scans = []
+    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    window = make_window(tmp_path)
+    try:
+        _menu_actions(window, "&View")["&Refresh server list"].trigger()
+        pump(qapp, lambda: scans)
+        assert scans == [True]
+    finally:
+        window.close()

@@ -1,6 +1,13 @@
-"""Viewer widget that displays the remote desktop and forwards input to it."""
+"""Viewer widget that displays the remote desktop and forwards input to it.
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+While a frame is shown, every key belongs to the remote machine: the widget
+accepts `ShortcutOverride` events so the window's menu shortcuts (Ctrl+W,
+Ctrl+Q, F5, …) never swallow keys meant for the remote desktop. **F11 is the
+single key reserved for the local app** (the fullscreen toggle) — it is never
+forwarded.
+"""
+
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QFocusEvent,
     QImage,
@@ -144,6 +151,20 @@ class ViewerWidget(QWidget):
         else:
             self._pressed_keys.discard(vk)
         self.inputEvent.emit({"action": "key", "vk": vk, "pressed": pressed})
+
+    def event(self, event) -> bool:
+        # See the module docstring: with a frame present, accepting the
+        # override makes Qt redeliver the key as an ordinary KeyPress to
+        # this widget (which forwards it) instead of firing a local
+        # shortcut. Without a frame, local shortcuts work normally.
+        if (
+            event.type() == QEvent.Type.ShortcutOverride
+            and self._frame is not None
+            and event.key() != Qt.Key.Key_F11
+        ):
+            event.accept()
+            return True
+        return super().event(event)
 
     def focusNextPrevChild(self, next: bool) -> bool:
         # Qt consumes Tab/Shift+Tab for focus traversal before keyPressEvent
