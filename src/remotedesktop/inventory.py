@@ -2,9 +2,10 @@
 
 Both apps keep one `ConnectionInventory`: the server records every client that
 connects or attempts to, the client records every server it discovers or tries
-to reach. `InventoryTab` shows it as a table and, optionally, a button to act
-on the selected peer (revoke a client / forget a server). Persisted in SQLite,
-so it answers "who is using this on the LAN, and who tried?" across restarts.
+to reach. `InventoryTab` shows it as a table and, optionally, a button on each
+row to act on that peer (revoke a client / forget a server). Persisted in
+SQLite, so it answers "who is using this on the LAN, and who tried?" across
+restarts.
 """
 
 import sqlite3
@@ -15,6 +16,7 @@ from dataclasses import astuple, dataclass, fields
 from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHBoxLayout,
     QHeaderView,
     QPushButton,
     QTableWidget,
@@ -140,8 +142,9 @@ class ConnectionInventory(QObject):
 class InventoryTab(QWidget):
     """Table view of a ConnectionInventory, refreshed as it changes.
 
-    If `action_label`/`action_callback` are given, a button below the table is
-    enabled when a row is selected and calls `action_callback(peer_key)`.
+    If `action_label`/`action_callback` are given, every row carries its own
+    button labeled `action_label` that calls `action_callback(peer_key)` for
+    that row's peer.
     """
 
     _COLUMNS = ["Name", "Address", "Identifier", "State", "Attempts", "First seen", "Last seen"]
@@ -155,10 +158,12 @@ class InventoryTab(QWidget):
     ) -> None:
         super().__init__(parent)
         self._inventory = inventory
+        self._action_label = action_label
         self._action_callback = action_callback
         # One extra headerless column on the right: with stretchLastSection it
         # absorbs the leftover width, so the data columns (including "Last
-        # seen") stay sized to their contents.
+        # seen") stay sized to their contents. When an action is configured it
+        # doubles as the action column, hosting each row's button.
         self._table = QTableWidget(0, len(self._COLUMNS) + 1)
         self._table.setHorizontalHeaderLabels(self._COLUMNS + [""])
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -172,32 +177,27 @@ class InventoryTab(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._table)
 
-        self._action_button: QPushButton | None = None
-        if action_label and action_callback:
-            self._action_button = QPushButton(action_label)
-            self._action_button.setEnabled(False)
-            self._action_button.clicked.connect(self._on_action)
-            self._table.itemSelectionChanged.connect(self._on_selection_changed)
-            layout.addWidget(self._action_button)
-
         inventory.changed.connect(self.refresh)
         self.refresh()
 
-    def _selected_key(self) -> str | None:
-        row = self._table.currentRow()
-        if row < 0:
-            return None
-        item = self._table.item(row, 0)
-        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+    def _row_button(self, row: int) -> QPushButton | None:
+        """The action button in a row's trailing cell (None without actions)."""
+        container = self._table.cellWidget(row, len(self._COLUMNS))
+        return container.findChild(QPushButton) if container is not None else None
 
-    def _on_selection_changed(self) -> None:
-        if self._action_button is not None:
-            self._action_button.setEnabled(self._selected_key() is not None)
-
-    def _on_action(self) -> None:
-        key = self._selected_key()
-        if key and self._action_callback is not None:
-            self._action_callback(key)
+    def _make_row_button(self, key: str) -> QWidget:
+        # The trailing column is stretched; wrap the button in a left-aligned
+        # container so it keeps its natural size instead of filling the cell.
+        button = QPushButton(self._action_label)
+        assert self._action_callback is not None
+        callback = self._action_callback
+        button.clicked.connect(lambda _checked=False, k=key: callback(k))
+        container = QWidget()
+        box = QHBoxLayout(container)
+        box.setContentsMargins(4, 1, 4, 1)
+        box.addWidget(button)
+        box.addStretch(1)
+        return container
 
     def refresh(self) -> None:
         peers = self._inventory.peers()
@@ -217,5 +217,7 @@ class InventoryTab(QWidget):
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, peer.key)
                 self._table.setItem(row, column, item)
-        if self._action_button is not None:
-            self._action_button.setEnabled(self._selected_key() is not None)
+            if self._action_label and self._action_callback is not None:
+                self._table.setCellWidget(
+                    row, len(self._COLUMNS), self._make_row_button(peer.key)
+                )

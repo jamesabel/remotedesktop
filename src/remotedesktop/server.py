@@ -208,7 +208,7 @@ class ServerWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(status_tab, "Status")
         tabs.addTab(
-            InventoryTab(self.inventory, "Revoke access", self._revoke_client),
+            InventoryTab(self.inventory, "Revoke", self._revoke_client),
             "Clients on LAN",
         )
         tabs.addTab(
