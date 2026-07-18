@@ -11,4 +11,4 @@ if errorlevel 1 (
 )
 
 rem Launch the GUI detached so this console window can close immediately.
-start "" ".venv\Scripts\remotedesktop-server.exe" %*
+start "" ".venv\Scripts\remotedesktop.exe" %*

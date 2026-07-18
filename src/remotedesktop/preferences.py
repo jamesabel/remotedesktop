@@ -5,6 +5,8 @@ in the shared SQLite settings table (the single-database architecture), so
 they survive restarts and are injectable in tests like every other store.
 """
 
+from collections.abc import Sequence
+
 from PySide6.QtWidgets import QFormLayout, QSpinBox, QWidget
 
 from remotedesktop.config import Settings
@@ -27,12 +29,16 @@ class PreferencesTab(QWidget):
     def __init__(
         self,
         settings: Settings,
-        performance: PerformanceMonitor,
+        monitors: PerformanceMonitor | Sequence[PerformanceMonitor],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
-        self._performance = performance
+        # The app has one monitor per role (viewing/sharing); the window
+        # setting applies to all of them.
+        self._monitors = (
+            [monitors] if isinstance(monitors, PerformanceMonitor) else list(monitors)
+        )
         self.history_minutes = QSpinBox()
         self.history_minutes.setRange(1, 30)
         self.history_minutes.setSuffix(" min")
@@ -46,4 +52,5 @@ class PreferencesTab(QWidget):
     def _on_history_changed(self, minutes: int) -> None:
         seconds = minutes * 60
         self._settings.set(PERFORMANCE_WINDOW_KEY, str(seconds))
-        self._performance.set_window_seconds(float(seconds))
+        for monitor in self._monitors:
+            monitor.set_window_seconds(float(seconds))

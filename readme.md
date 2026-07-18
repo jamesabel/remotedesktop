@@ -6,49 +6,54 @@
 ![Python](https://img.shields.io/badge/python-3.14%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-**Lossless, low-latency remote desktop for Windows computers on your LAN — pure Python, zero configuration.**
+**Lossless, low-latency remote desktop for Windows computers on your LAN — one app, pure Python, zero configuration.**
 
-Run the server on the computer you want to reach and the client anywhere else
-on the network: the server is discovered automatically, the first connection
-is approved with one click on the server side, and from then on the client
-reconnects instantly whenever the server is running. The screen stream is
+Run the same app on every computer. Tick *Share this computer's screen on
+the LAN* on the ones you want to reach, and they appear automatically in
+every other instance's *Servers* panel: the first connection is approved
+with one click on the shared computer, and from then on it reconnects
+instantly. View several computers at once — each in its own tab — while
+optionally sharing your own screen at the same time; closing the window
+while sharing keeps serving from the system tray. The screen stream is
 pixel-exact at full resolution — built for documents, code, and terminals
 rather than video — captured with DXGI desktop duplication and delta-compressed
 so only the parts of the screen that changed are sent. No Windows RDP, no
-Microsoft accounts, no cloud: just two apps and your LAN.
+Microsoft accounts, no cloud: just one app and your LAN.
 
 ## See it in action
 
-### Client
+### Viewing
 
-![Client demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/client-demo.gif)
+![Viewing demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/client-demo.gif)
 
-The client discovers the server on the LAN, connects, and streams its
+The app discovers sharing computers on the LAN, connects, and streams each
 desktop live in a tab named after that computer — click into the view and
 your mouse and keyboard control the remote machine. Connect to several
-servers at once and each gets its own tab; the window title lists every
+computers at once and each gets its own tab; the window title lists every
 connected computer. The *Performance* tab graphs bandwidth and round-trip
 time with live statistics.
 
-### Server
+### Sharing
 
-![Server demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/server-demo.gif)
+![Sharing demo](https://raw.githubusercontent.com/jamesabel/remotedesktop/master/docs/media/server-demo.gif)
 
-The server's *Status* tab shows every connected viewer — who they are (login
-name, computer, OS) and how the connection is doing (bandwidth, round-trip
-time with mean/min/max/p99/jitter over the recent window).
+The *Sharing* tab is where an instance opts in to being shared, and shows
+every connected viewer — who they are (login name, computer, OS) and how
+the connection is doing (bandwidth, round-trip time with
+mean/min/max/p99/jitter over the recent window).
 
 ## Features
 
-- 🔍 **Autodiscovery** — servers announce themselves over UDP; the client lists every server on the LAN, no addresses to type.
-- 🗂️ **Multiple servers at once** — one client can view and control several servers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
+- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is an opt-in checkbox on the *Sharing* tab, and only one instance runs per computer (launching it again just raises the existing window).
+- 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type.
+- 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
 - 🔁 **Robust connections** — dead connections are detected and dropped within seconds, and approved clients reconnect automatically without ceremony.
-- 🚀 **Hands-off operation** — optional start-at-login (per-user, no admin rights) and a *Restart server* button usable from the remote session itself, so you can update the software without visiting the machine.
+- 🚀 **Hands-off operation** — optional start-at-login (per-user, no admin rights), close-to-tray while sharing (the screen stays available with the window closed), and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
 - 🗃️ **Persistent peer inventory** — both apps keep a SQLite-backed history of every peer seen on the LAN, with one-click *revoke access* / *forget server*.
 
 In scope: screen, keyboard, mouse, and clipboard. Out of scope: shared
@@ -68,21 +73,24 @@ or, with [uv](https://docs.astral.sh/uv/):
 uv tool install remotedesktop
 ```
 
-Or run straight from a clone of this repository: double-click
-`run_server.bat` on the computer to be shared and `run_client.bat` on the
-viewing computer — each prepares the environment on first use and launches
-the app.
+Or run straight from a clone of this repository: double-click `run.bat` —
+it prepares the environment on first use and launches the app.
 
 ## Quick start
 
-1. On the computer to share, run `remotedesktop-server`.
-2. On the viewing computer, run `remotedesktop-client` — the server appears
-   in its *Servers* panel; double-click it.
-3. Approve the connection in the dialog that pops up on the server. That's
-   it — future connections from that client need no approval.
+1. Run `remotedesktop` on both computers.
+2. On the computer to share, open the *Sharing* tab and tick
+   *Share this computer's screen on the LAN*.
+3. On the viewing computer, the shared computer appears in the *Servers*
+   panel — double-click it.
+4. Approve the connection in the dialog that pops up on the shared
+   computer. That's it — future connections from that computer need no
+   approval.
 
-From a terminal in a clone of this repo, the same apps run with
-`uv run remotedesktop-server` and `uv run remotedesktop-client`.
+From a terminal in a clone of this repo, the app runs with
+`uv run remotedesktop` (or `uv run python -m remotedesktop` for console
+output). While sharing, closing the window keeps the app serving from the
+system tray; quit from the tray menu.
 
 ## Security model
 
@@ -91,13 +99,14 @@ generates once and keeps. The trust model is tuned for a **trusted LAN**:
 certificates are trusted on first use and a changed fingerprint is logged
 rather than blocking the connection, favoring reliable reconnection over
 strict certificate checking. Unapproved clients are limited to small
-handshake messages until the server user admits them; access can be revoked
-at any time from the server's *Clients on LAN* tab. There is no dependency
+handshake messages until the user at the shared computer admits them;
+access can be revoked at any time from the *Clients on LAN* tab. There is
+no dependency
 on Windows RDP or any Microsoft-based authentication.
 
 ## How it works
 
-All of this is pure Python — the GUIs are PySide6 (Qt), and the two places
+All of this is pure Python — the GUI is PySide6 (Qt), and the two places
 that need to talk to Windows directly (screen capture and input injection)
 call the Win32/COM APIs through `ctypes`, so there are no native extensions
 to compile.

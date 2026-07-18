@@ -1,46 +1,43 @@
-"""Server GUI application: shares this computer's desktop with permitted
-clients and prompts the user to approve first-time connections."""
+"""The serving role of the app: the Sharing tab.
+
+`SharingTab` is where an instance opts in to being a server: a checkbox
+starts/stops sharing this computer's screen on the LAN. It owns the
+`ShareServer` and `DiscoveryResponder` lifecycle — both exist only while
+sharing is enabled — and shows who is viewing (`ViewersTable`), the
+autostart-at-login option, and the app restart button. The opt-in persists
+in the settings table (`server_enabled`), so an instance that shared keeps
+sharing on the next start.
+"""
 
 import logging
 import socket
 import sqlite3
-import sys
-import time
 
-from PySide6.QtCore import QProcess, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QShowEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QCheckBox,
     QHeaderView,
     QLabel,
-    QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from remotedesktop import __version__, compat, db, icon, logs, tls, window_state
-from remotedesktop.about import AboutTab
+from remotedesktop import __version__, compat, tls
 from remotedesktop.autostart import Autostart
-from remotedesktop.clipboard import ClipboardSync
-from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
+from remotedesktop.config import PairedClients, Settings, default_config_dir
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
     DISCOVERY_PORT,
     DiscoveryResponder,
 )
-from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
-from remotedesktop.modal_loop import HTCLOSE, HTMAXBUTTON, HTMINBUTTON, ModalLoopPump
-from remotedesktop.performance import PerformanceMonitor, PerformanceTab, format_ms, format_rate
-from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
+from remotedesktop.performance import PerformanceMonitor, format_ms, format_rate
 from remotedesktop.sharing import ShareServer
 
 _log = logging.getLogger("remotedesktop.server")
@@ -51,8 +48,10 @@ class ViewersTable(QTableWidget):
 
     Identity fields come from each viewer's hello (`ShareServer.viewers()`);
     Send/Receive/Round trip come from the performance monitor's per-stream
-    numbers. Rows refresh when the viewer count changes and once per monitor
-    tick — but only while visible (background tabs schedule no work).
+    numbers. The table follows whatever ShareServer is currently set via
+    `set_share_server` (None while sharing is off → empty). Rows refresh
+    when the viewer count changes and once per monitor tick — but only
+    while visible (background tabs schedule no work).
     """
 
     _COLUMNS = [
@@ -66,7 +65,7 @@ class ViewersTable(QTableWidget):
     _MS_COLUMNS = (8, 9, 10, 11, 12, 13)  # RTT latest + window statistics
     _METRIC_COLUMNS = _RATE_COLUMNS + _MS_COLUMNS
 
-    def __init__(self, share_server, performance: PerformanceMonitor, parent=None) -> None:
+    def __init__(self, performance: PerformanceMonitor, parent=None) -> None:
         # One extra headerless column takes the stretch so the data columns
         # stay sized to their contents (the InventoryTab spacer pattern).
         super().__init__(0, len(self._COLUMNS) + 1, parent)
@@ -82,10 +81,18 @@ class ViewersTable(QTableWidget):
         for column in self._METRIC_COLUMNS:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.setColumnWidth(column, rate_width if column in self._RATE_COLUMNS else ms_width)
-        self._share_server = share_server
+        self._share_server = None
         self._performance = performance
-        share_server.clientCountChanged.connect(self._on_count_changed)
         performance.updated.connect(self._on_monitor_tick)
+        self.refresh()
+
+    def set_share_server(self, share_server) -> None:
+        """Follow a new ShareServer (or None while sharing is off)."""
+        if self._share_server is not None:
+            self._share_server.clientCountChanged.disconnect(self._on_count_changed)
+        self._share_server = share_server
+        if share_server is not None:
+            share_server.clientCountChanged.connect(self._on_count_changed)
         self.refresh()
 
     def _on_count_changed(self, _count: int) -> None:
@@ -110,7 +117,7 @@ class ViewersTable(QTableWidget):
         return version
 
     def refresh(self) -> None:
-        viewers = self._share_server.viewers()
+        viewers = self._share_server.viewers() if self._share_server is not None else []
         self.setRowCount(len(viewers))
         for row, viewer in enumerate(viewers):
             metrics = self._performance.metrics_for(viewer["stream"])
@@ -141,149 +148,173 @@ class ViewersTable(QTableWidget):
                 self.setItem(row, column, item)
 
 
-class ServerWindow(QMainWindow):
+class SharingTab(QWidget):
+    """Opt in to sharing this computer's screen, and manage the viewers.
+
+    Owns the ShareServer + DiscoveryResponder: both are created when sharing
+    is enabled and torn down when it is disabled, so a viewing-only instance
+    binds no ports (and never creates TLS credentials). The window hosting
+    this tab wires `statusMessage` to its Connection log, `peerEvent` to the
+    server-side inventory, `sharingChanged` to its tray/title state, and
+    `restartRequested` to the app restart flow.
+    """
+
+    statusMessage = Signal(str)
+    peerEvent = Signal(dict)  # {key, event, name, address, detail} for the inventory
+    sharingChanged = Signal(bool)  # emitted with `serving` after start/stop
+    restartRequested = Signal()
+
     def __init__(
         self,
         *,
+        settings: Settings,
+        connection: sqlite3.Connection,
+        performance: PerformanceMonitor,
+        clipboard=None,
+        credentials: tuple | None = None,
+        autostart: Autostart | None = None,
         discovery_port: int = DISCOVERY_PORT,
         connect_port: int = DEFAULT_CONNECT_PORT,
-        paired: PairedClients | None = None,
-        credentials=None,
-        connection: sqlite3.Connection | None = None,
-        autostart: Autostart | None = None,
+        parent: QWidget | None = None,
     ) -> None:
-        super().__init__()
-        self.setWindowTitle(f"Remote Desktop Server {__version__}")
-        self.setWindowIcon(icon.app_icon("server"))
+        super().__init__(parent)
+        self._settings = settings
+        self._connection = connection
+        self._performance = performance
+        self._clipboard = clipboard
+        self._credentials = credentials
+        self._discovery_port = discovery_port
+        self._connect_port = connect_port
+        self._paired = PairedClients(connection)
         self._name = socket.gethostname()
-
-        self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self._autostart = autostart if autostart is not None else Autostart()
-        self.autostart_checkbox = QCheckBox("Start this server when I log in to Windows")
+
+        self.share_server: ShareServer | None = None
+        self.responder: DiscoveryResponder | None = None
+        self._listening = False
+        self._discoverable = False
+
+        self.share_checkbox = QCheckBox("Share this computer's screen on the LAN")
+        self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.viewers_table = ViewersTable(performance)
+        self.autostart_checkbox = QCheckBox("Start Remote Desktop when I log in to Windows")
         self.autostart_checkbox.setChecked(self._autostart.is_enabled())
         self.autostart_checkbox.setEnabled(self._autostart.available)
         self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
-        self.connection_log = QPlainTextEdit()
-        self.connection_log.setReadOnly(True)
-        self.connection_log.setMaximumBlockCount(1000)
-        self.get_log_button = QPushButton("Get client log")
-        self.get_log_button.setToolTip(
-            "Ask the most recently connected client to send its debug log"
-        )
-        self.get_log_button.clicked.connect(self._request_client_log)
-        log_tab = QWidget()
-        log_layout = QVBoxLayout(log_tab)
-        log_layout.addWidget(self.get_log_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        log_layout.addWidget(self.connection_log)
-        # While this window sits in Windows' modal move/size loop (title-bar
-        # drag — including one driven by an injected remote click), Qt stops
-        # running; the pump keeps sockets and timers serviced so a remote
-        # mouse-up can still arrive and end the drag instead of deadlocking.
-        # Caption-button presses (minimize/maximize/close) are handled by
-        # the pump directly — their native tracking loop cannot be pumped.
-        self._modal_pump = ModalLoopPump(caption_action=self._on_caption_button)
-        self.restart_button = QPushButton("Restart server")
+        self.restart_button = QPushButton("Restart app")
         self.restart_button.setToolTip(
             "Relaunch this app (e.g. after updating the software). It can be "
             "clicked from a remote desktop session, so an update doesn't "
             "require visiting this computer."
         )
-        self.restart_button.clicked.connect(self._restart_server)
-        status_tab = QWidget()
-        status_layout = QVBoxLayout(status_tab)
-        status_layout.addWidget(self._summary)
-        # The viewers table is inserted here (index 1) once share_server
-        # exists, taking the tab's spare space.
-        status_layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
-        status_layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.restart_button.clicked.connect(self.restartRequested.emit)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.share_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self._summary)
+        layout.addWidget(self.viewers_table, stretch=1)
+        layout.addWidget(self.autostart_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        # Tests inject a connection to a temp database; the app uses the default.
-        self._db = connection if connection is not None else db.connect(default_db_path())
-        self._settings = Settings(self._db)
-        self.performance = PerformanceMonitor(
-            window_seconds=float(load_performance_window_seconds(self._settings)),
-            parent=self,
-        )
-        self.inventory = ConnectionInventory(self._db, "server_peers", self)
-        tabs = QTabWidget()
-        tabs.addTab(status_tab, "Status")
-        tabs.addTab(
-            InventoryTab(self.inventory, "Revoke", self._revoke_client),
-            "Clients on LAN",
-        )
-        tabs.addTab(
-            PerformanceTab(self.performance, local="server", remote="client"),
-            "Performance",
-        )
-        tabs.addTab(log_tab, "Connection log")
-        tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
-        tabs.addTab(AboutTab(), "About")
-        self.setCentralWidget(tabs)
+        # Restore the persisted opt-in state (checkbox only). The host window
+        # calls restore_sharing() once its signal wiring exists, so no
+        # startup status message is emitted into the void.
+        self.share_checkbox.setChecked(self._settings.get("server_enabled") == "1")
+        self.share_checkbox.toggled.connect(self._on_share_toggled)
+        self._update_summary(0)
 
-        if credentials is None:
+    def restore_sharing(self) -> None:
+        """Start sharing if the persisted opt-in is on (call after wiring)."""
+        if self.share_checkbox.isChecked() and self.share_server is None:
+            self.start_sharing()
+
+    @property
+    def serving(self) -> bool:
+        """True while sharing is enabled and the server is actually listening."""
+        return self.share_server is not None and self._listening
+
+    def _on_share_toggled(self, checked: bool) -> None:
+        if checked:
+            self.start_sharing()
+        else:
+            self.stop_sharing()
+
+    def start_sharing(self) -> None:
+        if self.share_server is not None:
+            return
+        # TLS credentials are created on first enable, not at construction:
+        # a viewing-only instance never writes server_cert.pem.
+        if self._credentials is None:
             config_dir = default_config_dir()
-            credentials = tls.load_or_create_credentials(
+            self._credentials = tls.load_or_create_credentials(
                 config_dir / "server_cert.pem", config_dir / "server_key.pem"
             )
-        if paired is None:
-            paired = PairedClients(self._db)
-        self._clipboard = ClipboardSync(parent=self)
-        self.share_server = ShareServer(
+        # A fresh ShareServer per enable: close() leaves teardown state
+        # behind, so recreating is provably clean.
+        server = ShareServer(
             self._ask_approval,
-            credentials=credentials,
-            paired=paired,
+            credentials=self._credentials,
+            paired=self._paired,
             clipboard=self._clipboard,
-            performance=self.performance,
-            log_provider=lambda: read_log_tail("server"),
+            performance=self._performance,
+            log_provider=lambda: read_log_tail("remotedesktop"),
             parent=self,
         )
-        self.viewers_table = ViewersTable(self.share_server, self.performance)
-        status_layout.insertWidget(1, self.viewers_table, stretch=1)
-        self.share_server.status.connect(self.log)
-        self.share_server.clientCountChanged.connect(self._update_summary)
-        self.share_server.peerEvent.connect(self._record_peer)
-        self.share_server.logReceived.connect(self._show_client_log)
-        self._listening = self.share_server.listen(connect_port)
-
-        self.responder: DiscoveryResponder | None = None
+        server.status.connect(self.statusMessage)
+        server.clientCountChanged.connect(self._update_summary)
+        server.peerEvent.connect(self.peerEvent)
+        server.logReceived.connect(self._show_client_log)
+        self.share_server = server
+        self.viewers_table.set_share_server(server)
+        self._listening = server.listen(self._connect_port)
         self._discoverable = False
         if self._listening:
             responder = DiscoveryResponder(
-                self._name, self.share_server.port, discovery_port=discovery_port
+                self._name, server.port, discovery_port=self._discovery_port
             )
             try:
                 responder.start()
             except OSError as error:
-                self.log(
-                    f"Discovery unavailable (UDP port {discovery_port}): {error} — "
+                self.statusMessage.emit(
+                    f"Discovery unavailable (UDP port {self._discovery_port}): {error} — "
                     "another server may already be running"
                 )
             else:
                 self.responder = responder
                 self._discoverable = True
-                self.log(
+                self.statusMessage.emit(
                     f'Discoverable as "{self._name}" '
-                    f"(UDP port {discovery_port}, TCP port {self.share_server.port})"
+                    f"(UDP port {self._discovery_port}, TCP port {server.port})"
                 )
+        self._settings.set("server_enabled", "1")
         self._update_summary(0)
-        window_state.restore_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
+        self.sharingChanged.emit(self.serving)
 
-    def log(self, message: str) -> None:
-        # Everything shown in the Connection log pane also goes to the debug
-        # log file (when main() enabled it), so it survives the window.
-        _log.info(message)
-        self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
+    def stop_sharing(self) -> None:
+        self._teardown()
+        self._settings.set("server_enabled", "0")
+        self._update_summary(0)
+        self.sharingChanged.emit(False)
 
-    def _record_peer(self, event: dict) -> None:
-        self.inventory.record(
-            event["key"],
-            event["event"],
-            name=event.get("name", ""),
-            address=event.get("address", ""),
-            detail=event.get("detail", ""),
-        )
+    def shutdown(self) -> None:
+        """App close: free the ports without touching the persisted opt-in."""
+        self._teardown()
+
+    def _teardown(self) -> None:
+        if self.responder is not None:
+            self.responder.stop()
+            self.responder = None
+        if self.share_server is not None:
+            self.share_server.close()  # disconnects all viewers
+            self.share_server.deleteLater()
+            self.share_server = None
+            self.viewers_table.set_share_server(None)
+        self._listening = False
+        self._discoverable = False
 
     def _update_summary(self, client_count: int) -> None:
+        if self.share_server is None:
+            self._summary.setText("Not sharing this computer's screen")
+            return
         if not self._listening:
             self._summary.setText("Cannot share: the connection port is already in use")
             return
@@ -295,82 +326,38 @@ class ServerWindow(QMainWindow):
         sharing = (
             f"Sharing this desktop with {client_count} viewer(s)"
             if client_count
-            else "Not sharing"
+            else "Sharing enabled — no viewers connected"
         )
         self._summary.setText(f"{discoverable}\n{sharing}")
 
     def _on_autostart_toggled(self, checked: bool) -> None:
         self._autostart.set_enabled(checked)
-        self.log(
-            "Server will start at login" if checked else "Server will no longer start at login"
+        self.statusMessage.emit(
+            "Remote Desktop will start at login"
+            if checked
+            else "Remote Desktop will no longer start at login"
         )
 
-    def _revoke_client(self, client_id: str) -> None:
-        answer = QMessageBox.question(
-            self,
-            "Revoke access",
-            f"Revoke access for client {client_id}?\n\n"
-            "It will be disconnected now and must be approved again to reconnect.",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
+    def revoke_client(self, client_id: str) -> None:
+        """Revoke a client's pairing, whether or not sharing is running."""
+        if self.share_server is not None:
             self.share_server.revoke_client(client_id)
-
-    def _restart_server(self) -> None:
-        """Relaunch this app in a new process and exit.
-
-        Meant to be clicked through a remote desktop session after updating
-        the software, so the new version starts without anyone at this
-        computer. The listening sockets are closed before spawning so the
-        replacement can bind the same ports.
-        """
-        answer = QMessageBox.question(
-            self,
-            "Restart server",
-            "Restart the server app?\n\n"
-            "Viewers will be disconnected and can reconnect in a few seconds "
-            "(approved clients reconnect without a new permission prompt).",
+            return
+        self._paired.revoke(client_id)
+        self.statusMessage.emit(f"Revoked access for client {client_id}")
+        self.peerEvent.emit(
+            {"key": client_id, "event": "revoked", "name": "", "address": "", "detail": client_id}
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self.log("Restarting: freeing ports and launching a new server process")
-        _log.info("Restart requested — relaunching %s -m remotedesktop.server", sys.executable)
-        if self.responder is not None:
-            self.responder.stop()
-            self.responder = None
-        self.share_server.close()
-        if not QProcess.startDetached(sys.executable, ["-m", "remotedesktop.server"]):
-            # Extremely unlikely (sys.executable exists); the app stays open —
-            # sharing is stopped, but the machine isn't left with nothing.
-            self.log("Restart failed: could not launch a new process — restart manually")
-            _log.error("QProcess.startDetached failed for %s", sys.executable)
-            return
-        self.close()
-        QApplication.quit()
 
-    def _request_client_log(self) -> None:
+    def request_client_log(self) -> None:
+        if self.share_server is None:
+            self.statusMessage.emit("Not sharing — no connected client to request a log from")
+            return
         self.share_server.request_log()
 
     def _show_client_log(self, client_name: str, text: str) -> None:
         title = f'Log from client "{client_name}"' if client_name else "Log from client"
         PeerLogDialog(title, text, self).show()
-
-    def _on_caption_button(self, hit_code: int) -> None:
-        # Deferred: the action (especially close) must not run inside the
-        # native message handler that reported the press.
-        if hit_code == HTMINBUTTON:
-            action = self.showMinimized
-        elif hit_code == HTMAXBUTTON:
-            action = self.showNormal if self.isMaximized() else self.showMaximized
-        elif hit_code == HTCLOSE:
-            action = self.close
-        else:
-            return
-        QTimer.singleShot(0, action)
-
-    def nativeEvent(self, event_type, message):
-        if self._modal_pump.handle_native_event(event_type, message):
-            return True, 0
-        return super().nativeEvent(event_type, message)
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:
         box = QMessageBox(
@@ -378,35 +365,14 @@ class ServerWindow(QMainWindow):
             "Connection request",
             f'Allow "{client_name}" to view this desktop?\n\nClient id: {client_id}',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            self,
+            self.window(),
         )
-        # The server usually isn't the foreground app when a request arrives,
-        # and Windows won't give focus to a background app's dialog — keep it
-        # on top so it can't sit unnoticed behind other windows.
+        # The app usually isn't the foreground window when a request arrives
+        # (it may even be hidden in the tray), and Windows won't give focus
+        # to a background app's dialog — keep it on top so it can't sit
+        # unnoticed behind other windows.
         box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         box.show()
         box.raise_()
         box.activateWindow()
         return box.exec() == QMessageBox.StandardButton.Yes
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        window_state.save_geometry(self, self._settings, window_state.SERVER_GEOMETRY_KEY)
-        if self.responder is not None:
-            self.responder.stop()
-        self.share_server.close()
-        super().closeEvent(event)
-
-
-def main() -> None:  # pragma: no cover - runs the Qt event loop
-    log_path = logs.init_logging("server")
-    icon.set_windows_app_id("remotedesktop.server")
-    app = QApplication(sys.argv)
-    app.setWindowIcon(icon.app_icon("server"))
-    window = ServerWindow()
-    window.log(f"Detailed log: {log_path}")
-    window.show()
-    raise SystemExit(app.exec())
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()

@@ -1,7 +1,7 @@
 [project]
 name = "remotedesktop"
 dynamic = ["version"]
-description = "Remote desktop client/server for Windows computers on the same LAN, with autodiscovery. Provides screen, keyboard, mouse, and clipboard sharing without RDP or Microsoft authentication."
+description = "Remote desktop app for Windows computers on the same LAN, with autodiscovery. View other computers and optionally share this one — screen, keyboard, mouse, and clipboard, without RDP or Microsoft authentication."
 readme = "readme.md"
 license = "MIT"
 authors = [{ name = "James Abel", email = "j@abel.co" }]
@@ -27,8 +27,7 @@ Repository = "https://github.com/jamesabel/remotedesktop"
 PyPI = "https://pypi.org/project/remotedesktop/"
 
 [project.gui-scripts]
-remotedesktop-client = "remotedesktop.client:main"
-remotedesktop-server = "remotedesktop.server:main"
+remotedesktop = "remotedesktop.app:main"
 
 [dependency-groups]
 dev = [

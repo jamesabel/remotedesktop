@@ -1,13 +1,13 @@
 """Generate the README demo GIFs (docs/media/*.gif) from synthetic data.
 
-Runs the real client and server GUI apps in one process, connected over
-loopback TLS with temp-file databases, and drives a short scripted session:
-discovery, approval, live streaming of a *drawn* fake desktop (the
-ShareServer._capture test seam — no real screen content is ever captured),
-tab switches. Both windows are rendered with WA_DontShowOnScreen, grabbed on
-a timer, and assembled into GIFs with Pillow.
+Runs two instances of the real unified app in one process — one sharing its
+(drawn, fake) desktop via the ShareServer._capture test seam, one viewing —
+connected over loopback TLS with temp-file databases, and drives a short
+scripted session: discovery, approval, live streaming, tab switches. Both
+windows are rendered with WA_DontShowOnScreen, grabbed on a timer, and
+assembled into GIFs with Pillow.
 
-Machine identities are synthetic too ("DEN-PC" serving, "LAPTOP" viewing,
+Machine identities are synthetic too ("DEN-PC" sharing, "LAPTOP" viewing,
 user "alex"), so nothing about the generating machine leaks into the README.
 
 Usage:  uv run python tools/make_demo_gifs.py [output_dir]
@@ -29,11 +29,10 @@ from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPol
 from PySide6.QtWidgets import QApplication, QMessageBox, QTabWidget
 
 from remotedesktop import db, sharing, tls
+from remotedesktop.app import MainWindow
 from remotedesktop.autostart import Autostart
-from remotedesktop.client import ClientWindow
 from remotedesktop.config import PairedClients, Settings
 from remotedesktop.discovery import ServerInfo
-from remotedesktop.server import ServerWindow
 from remotedesktop import client as client_module
 
 SCREEN_W, SCREEN_H = 1280, 800
@@ -234,17 +233,24 @@ def main() -> None:
         credentials = tls.load_or_create_credentials(
             tmp_path / "cert.pem", tmp_path / "key.pem"
         )
+        demo_autostart = Autostart(
+            key_path=r"Software\remotedesktop-tests\Demo", value_name="demo"
+        )
         server_db = db.connect(tmp_path / "server.db")
-        server_window = ServerWindow(
+        Settings(server_db).set("server_enabled", "1")  # DEN-PC opts in to sharing
+        server_window = MainWindow(
+            connection=server_db,
+            auto_scan=False,
+            credentials=credentials,
+            autostart=demo_autostart,
             discovery_port=free_udp_port(),  # ephemeral: invisible to the real LAN
             connect_port=0,
-            paired=PairedClients(server_db),
-            credentials=credentials,
-            connection=server_db,
-            autostart=Autostart(key_path=r"Software\remotedesktop-tests\Demo", value_name="demo"),
+            tray_available=False,
         )
         desktop = SyntheticDesktop()
-        server_window.share_server._capture = desktop.grab  # the test seam  # ty: ignore[invalid-assignment]
+        share_server = server_window.sharing_tab.share_server
+        assert share_server is not None  # server_enabled was set above
+        share_server._capture = desktop.grab  # the test seam  # ty: ignore[invalid-assignment]
 
         # A second, window-less server ("LAB-PC", teal desktop) so the client
         # demo shows one tab per connected server.
@@ -262,19 +268,28 @@ def main() -> None:
         client_settings = Settings(client_db)
         client_settings.set("client_id", str(uuid.uuid4()))
         client_settings.set("client_name", "LAPTOP")
-        client_window = ClientWindow(connection=client_db, auto_scan=False)
+        client_window = MainWindow(
+            connection=client_db,
+            auto_scan=False,
+            autostart=demo_autostart,
+            discovery_port=free_udp_port(),
+            connect_port=0,
+            tray_available=False,
+        )
 
         for window, size in ((server_window, (1180, 620)), (client_window, (1180, 760))):
             window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
             window.resize(*size)
             window.show()
 
-        info = ServerInfo(name="DEN-PC", host="127.0.0.1", port=server_window.share_server.port)
+        info = ServerInfo(name="DEN-PC", host="127.0.0.1", port=share_server.port)
         lab_info = ServerInfo(name="LAB-PC", host="127.0.0.1", port=lab_server.port)
         client_module.discover_servers = lambda: [info, lab_info]  # ty: ignore[invalid-assignment]
         client_tabs = client_window.centralWidget()
         server_tabs = server_window.centralWidget()
         assert isinstance(client_tabs, QTabWidget) and isinstance(server_tabs, QTabWidget)
+        # The sharing instance opens on its Sharing tab (its "home" view).
+        server_tabs.setCurrentIndex(tab_index(server_tabs, "Sharing"))
 
         # The live remote-screen section is the product's whole point, so it
         # gets the lion's share of the runtime: DEN-PC streams alone first,
@@ -291,8 +306,10 @@ def main() -> None:
             (17.0, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "LAB-PC"))),
             (21.2, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Performance"))),
             (21.6, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Performance"))),
+            # The sharing instance's numbers live on the Sharing sub-tab.
+            (21.7, lambda: server_window.performance_pages.setCurrentIndex(1)),
             (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "DEN-PC"))),
-            (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Status"))),
+            (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Sharing"))),
         ]
         client_frames: list[Image.Image] = []
         server_frames: list[Image.Image] = []

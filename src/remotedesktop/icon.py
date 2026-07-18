@@ -2,9 +2,7 @@
 
 A monitor with a mouse pointer on the screen — "this desktop is controlled
 remotely". Painted with QPainter at every common icon size (no binary asset
-to version or package), with an accent color per app so the client (blue)
-and server (green) are distinguishable in the taskbar when both run on one
-machine.
+to version or package).
 """
 
 import ctypes
@@ -15,7 +13,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygonF
 
 _SIZES = (16, 24, 32, 48, 64, 128, 256)
 _FRAME = QColor("#37474f")
-_ACCENTS = {"client": QColor("#1e88e5"), "server": QColor("#43a047")}
+_ACCENTS = {"app": QColor("#1e88e5")}
 # A classic cursor-arrow outline on a 0..17 grid, placed on the screen.
 _POINTER = [(0, 0), (0, 14), (4, 11), (7, 17), (9.5, 16), (6.5, 10), (11, 10)]
 
@@ -45,8 +43,8 @@ def _pixmap(size: int, accent: QColor) -> QPixmap:
     return pixmap
 
 
-def app_icon(role: str) -> QIcon:
-    """The window/taskbar icon for "client" or "server"."""
+def app_icon(role: str = "app") -> QIcon:
+    """The window/taskbar icon (role "app")."""
     accent = _ACCENTS[role]
     icon = QIcon()
     for size in _SIZES:

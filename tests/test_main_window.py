@@ -1,21 +1,50 @@
-import socket
+"""Tests for the unified app window: viewing sessions, sharing, tray."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QListWidgetItem, QMessageBox
+import socket
+import sys
+
+from PySide6.QtCore import QProcess, Qt
+from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
 
 from remotedesktop import client as client_module
 from remotedesktop import db
-from remotedesktop.client import ClientWindow, DiscoveryPanel
-from remotedesktop.config import PairedClients
+from remotedesktop.app import MainWindow
+from remotedesktop.autostart import Autostart
+from remotedesktop.client import DiscoveryPanel
+from remotedesktop.config import PairedClients, Settings
 from remotedesktop.discovery import ServerInfo
 from remotedesktop.sharing import ShareServer
 
+from test_discovery import free_udp_port
 from test_sharing import pump
+from test_sharing_tab import stub_approval_prompt
+
+_TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 
 
-def make_window(tmp_path):
-    # auto_scan=False: window tests must never broadcast a discovery probe on the LAN.
-    return ClientWindow(connection=db.connect(tmp_path / "client.db"), auto_scan=False)
+def make_window(
+    tmp_path, credentials=None, *, serving=False, tray_available=False,
+    db_name="app.db", discovery_port=None,
+):
+    """A MainWindow on a temp DB with everything injected.
+
+    auto_scan=False: window tests must never broadcast a discovery probe on
+    the LAN. Serving instances always get injected credentials (never create
+    real cert files) and ephemeral ports.
+    """
+    assert not serving or credentials is not None
+    connection = db.connect(tmp_path / db_name)
+    if serving:
+        Settings(connection).set("server_enabled", "1")
+    return MainWindow(
+        connection=connection,
+        auto_scan=False,
+        credentials=credentials,
+        autostart=Autostart(key_path=_TEST_AUTOSTART_KEY, value_name="main-window-test"),
+        discovery_port=discovery_port if discovery_port is not None else free_udp_port(),
+        connect_port=0,
+        tray_available=tray_available,
+    )
 
 
 def make_share_server(credentials, tmp_path, *, approve=lambda *_: True, db_name="server.db"):
@@ -51,30 +80,52 @@ def test_received_server_log_opens_a_viewer_dialog(qapp, tmp_path):
         window.close()
 
 
-def test_window_starts_disconnected(qapp, tmp_path):
+def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
     window = make_window(tmp_path)
-    assert window.statusBar().currentMessage() == "Not connected"
-    assert "Client started" in window.connection_log.toPlainText()
-    tabs = window.centralWidget()
-    labels = [tabs.tabText(i) for i in range(tabs.count())]
-    assert "Performance" in labels and "Preferences" in labels
-    assert window._sessions == []  # server tabs appear only on connection
-    assert not window.performance._timer.isActive()  # idle: no periodic work
-    assert not window.windowIcon().isNull()
-    from remotedesktop import __version__
+    try:
+        assert window.statusBar().currentMessage() == "Not connected"
+        assert "Remote Desktop started" in window.connection_log.toPlainText()
+        tabs = window.centralWidget()
+        labels = [tabs.tabText(i) for i in range(tabs.count())]
+        for expected in ("Servers on LAN", "Sharing", "Clients on LAN", "Performance",
+                         "Connection log", "Preferences", "About"):
+            assert expected in labels
+        assert window._sessions == []  # server tabs appear only on connection
+        assert not window.sharing_tab.serving
+        # Idle: neither role schedules periodic work.
+        assert not window.client_performance._timer.isActive()
+        assert not window.server_performance._timer.isActive()
+        assert not window.windowIcon().isNull()
+        from remotedesktop import __version__
 
-    assert window.windowTitle() == f"Remote Desktop Client {__version__}"
-    window.close()
+        assert window.windowTitle() == f"Remote Desktop {__version__}"
+    finally:
+        window.close()
+
+
+def test_sharing_window_title_carries_the_suffix(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        from remotedesktop import __version__
+
+        assert window.sharing_tab.serving
+        assert window.windowTitle() == f"Remote Desktop {__version__} — sharing"
+        window.sharing_tab.share_checkbox.setChecked(False)
+        assert window.windowTitle() == f"Remote Desktop {__version__}"
+    finally:
+        window.close()
 
 
 def test_discovered_servers_are_recorded(qapp, tmp_path):
     window = make_window(tmp_path)
-    info = ServerInfo(name="box", host="10.0.0.7", port=1234)
-    window._record_discovered([info])
-    peers = window.inventory.peers()
-    assert len(peers) == 1
-    assert peers[0].state == "discovered"
-    window.close()
+    try:
+        info = ServerInfo(name="box", host="10.0.0.7", port=1234)
+        window._record_discovered([info])
+        peers = window.client_inventory.peers()
+        assert len(peers) == 1
+        assert peers[0].state == "discovered"
+    finally:
+        window.close()
 
 
 def test_connect_view_and_disconnect_full_flow(qapp, credentials, tmp_path):
@@ -100,21 +151,21 @@ def test_connect_view_and_disconnect_full_flow(qapp, credentials, tmp_path):
         assert window.centralWidget().tabText(0) == server_name
         assert window.windowTitle().startswith(f"{server_name} — ")
         key = f"127.0.0.1:{server.port}"
-        assert window.inventory._peers[key].state == "connected"
+        assert window.client_inventory._peers[key].state == "connected"
 
         # Input from the viewer is forwarded while connected.
         window._on_input_event(session, {"action": "move", "x": 0.5, "y": 0.5})
 
         # A re-scan that finds the connected server must not downgrade it.
         window._record_discovered([info])
-        assert window.inventory._peers[key].state == "connected"
+        assert window.client_inventory._peers[key].state == "connected"
 
         server.close()
         pump(qapp, lambda: not session.connected)
-        assert window.inventory._peers[key].state == "disconnected"
+        assert window.client_inventory._peers[key].state == "disconnected"
         # The tab stays (ready to reconnect); the title reverts to the base.
         assert window._sessions == [session]
-        assert window.windowTitle() == f"Remote Desktop Client {__version__}"
+        assert window.windowTitle() == f"Remote Desktop {__version__}"
     finally:
         window.close()
         server.close()
@@ -181,10 +232,10 @@ def test_denied_connection_keeps_denied_state(qapp, credentials, tmp_path):
         pump(qapp, lambda: session.denied)
         pump(qapp, lambda: "Denied" in window.statusBar().currentMessage())
         key = f"127.0.0.1:{server.port}"
-        pump(qapp, lambda: window.inventory._peers[key].state == "denied")
+        pump(qapp, lambda: window.client_inventory._peers[key].state == "denied")
         # The trailing socket disconnect must not overwrite "denied".
         pump(qapp, lambda: True, timeout=0.3)
-        assert window.inventory._peers[key].state == "denied"
+        assert window.client_inventory._peers[key].state == "denied"
     finally:
         window.close()
         server.close()
@@ -246,7 +297,7 @@ def test_forget_server_disconnects_and_forgets(qapp, credentials, tmp_path, monk
         window._forget_server(key)
         assert window._sessions == []  # the session tab went with it
         assert window._known_servers.get(key) is None
-        assert window.inventory._peers[key].state == "forgotten"
+        assert window.client_inventory._peers[key].state == "forgotten"
 
         # Answering "No" leaves a known server alone.
         monkeypatch.setattr(
@@ -281,6 +332,186 @@ def test_version_mismatch_warns_but_still_connects(qapp, credentials, tmp_path, 
     finally:
         window.close()
         server.close()
+
+
+def test_close_while_sharing_hides_to_tray(qapp, credentials, tmp_path, monkeypatch):
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, credentials, serving=True, tray_available=True)
+    try:
+        assert window._tray is not None
+        window.show()
+        window.close()
+        assert window.isHidden()  # hidden, not closed
+        assert quits == []
+        assert window.sharing_tab.serving  # still sharing in the background
+
+        # Quit (the tray menu action) really exits and stops sharing.
+        window._quit()
+        assert quits == [True]
+        assert window.sharing_tab.share_server is None
+    finally:
+        if not quits:
+            window._quit()
+
+
+def test_close_without_sharing_quits(qapp, tmp_path, monkeypatch):
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, tray_available=True)
+    assert window._tray is None  # no tray while not sharing
+    window.show()
+    window.close()
+    assert quits == [True]
+
+
+def test_stopping_sharing_while_hidden_restores_the_window(qapp, credentials, tmp_path, monkeypatch):
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, credentials, serving=True, tray_available=True)
+    try:
+        window.show()
+        window.close()
+        assert window.isHidden()
+        window.sharing_tab.share_checkbox.setChecked(False)
+        # No tray icon without sharing, so the window must come back.
+        assert not window.isHidden()
+        assert window._tray is None
+    finally:
+        window._quit()
+
+
+def test_own_server_is_labeled_in_discovery_results(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        own_port = window.sharing_tab.share_server.port
+        window.discovery_panel._show_results(
+            [
+                ServerInfo(name="ME", host="127.0.0.1", port=own_port),
+                ServerInfo(name="OTHER", host="127.0.0.1", port=own_port + 1),
+            ]
+        )
+        first = window.discovery_panel.server_list.item(0)
+        second = window.discovery_panel.server_list.item(1)
+        assert first is not None and first.text().endswith("(this computer)")
+        assert second is not None and not second.text().endswith("(this computer)")
+    finally:
+        window.close()
+
+
+def test_restart_declined_keeps_serving(qapp, credentials, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+    )
+    launches = []
+    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: launches.append(a)))
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        window._restart_app()
+        assert launches == []
+        assert window.sharing_tab.serving
+        assert window.sharing_tab.responder is not None
+    finally:
+        window.close()
+
+
+def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    launches, quits = [], []
+    monkeypatch.setattr(
+        QProcess, "startDetached", staticmethod(lambda *a: launches.append(a) or True)
+    )
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, credentials, serving=True)
+    window._restart_app()
+    # Ports are freed before the new process is spawned, so it can bind them.
+    assert window.sharing_tab.share_server is None
+    assert window.sharing_tab.responder is None
+    assert launches == [(sys.executable, ["-m", "remotedesktop"])]
+    assert quits == [True]
+
+
+def test_viewing_and_sharing_between_two_windows_loopback(qapp, credentials, tmp_path, monkeypatch):
+    """End-to-end through two unified app instances in one process."""
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    serving = make_window(tmp_path, credentials, serving=True, db_name="serving.db")
+    viewing = make_window(tmp_path, db_name="viewing.db")
+    try:
+        port = serving.sharing_tab.share_server.port
+        viewing.discovery_panel.serverActivated.emit(
+            ServerInfo(name="box", host="127.0.0.1", port=port)
+        )
+        session = viewing._sessions[0]
+        pump(qapp, lambda: session.viewer.has_frame)
+        assert session.connected
+        pump(qapp, lambda: serving.sharing_tab.viewers_table.rowCount() == 1)
+        # The serving side recorded the pairing in its Clients-on-LAN inventory.
+        pump(
+            qapp,
+            lambda: any(
+                p.state == "connected (paired)" for p in serving.server_inventory.peers()
+            ),
+        )
+        # Closing the viewer's tab drops the viewer on the serving side.
+        viewing._on_tab_close_requested(0)
+        pump(qapp, lambda: serving.sharing_tab.viewers_table.rowCount() == 0)
+        assert serving.sharing_tab.serving  # still sharing, just no viewers
+    finally:
+        viewing.close()
+        serving.close()
+
+
+def test_native_size_move_messages_drive_the_modal_pump(qapp, tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    from shiboken6 import VoidPtr
+
+    from remotedesktop.modal_loop import WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, ModalLoopPump
+    from test_modal_loop import FakeTimers
+
+    window = make_window(tmp_path)
+    try:
+        timers = FakeTimers()
+        window._modal_pump = ModalLoopPump(pump=lambda: None, timers=timers)
+        msg = wintypes.MSG()
+        msg.hWnd, msg.message = 0xBEEF, WM_ENTERSIZEMOVE
+        # Qt hands nativeEvent a void*; VoidPtr is that shape from Python.
+        window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        msg.message = WM_EXITSIZEMOVE
+        window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        assert timers.calls == [("start", 0xBEEF), ("stop", 0xBEEF)]
+    finally:
+        window.close()
+
+
+def test_caption_button_press_minimizes_without_native_tracking(qapp, tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    from shiboken6 import VoidPtr
+
+    from remotedesktop.modal_loop import HTMINBUTTON, WM_NCLBUTTONDOWN, ModalLoopPump
+    from test_modal_loop import FakeTimers
+
+    window = make_window(tmp_path)
+    try:
+        timers = FakeTimers()
+        window._modal_pump = ModalLoopPump(
+            pump=lambda: None, caption_action=window._on_caption_button, timers=timers
+        )
+        msg = wintypes.MSG()
+        msg.hWnd, msg.message, msg.wParam = 0xBEEF, WM_NCLBUTTONDOWN, HTMINBUTTON
+        result = window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        assert result[0] is True  # consumed: DefWindowProc's tracking never starts
+        assert timers.calls == []  # and the pump never needed to arm
+        for _ in range(5):
+            qapp.processEvents()  # the deferred action runs on the event loop
+        assert window.isMinimized()
+    finally:
+        window.close()
 
 
 def test_discovery_panel_lists_scan_results(qapp, monkeypatch):
