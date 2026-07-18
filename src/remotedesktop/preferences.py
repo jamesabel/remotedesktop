@@ -1,14 +1,17 @@
-"""The Preferences tab: user-adjustable settings, persisted in `Settings`.
+"""The Preferences tab: user-adjustable settings.
 
-Currently one preference — the performance-history window length. Values live
-in the shared SQLite settings table (the single-database architecture), so
-they survive restarts and are injectable in tests like every other store.
+Performance-history length persists in `Settings` (the shared SQLite
+settings table, injectable in tests like every other store); the
+start-at-login option reads and writes the Windows Run registry key via
+`Autostart`.
 """
 
 from collections.abc import Sequence
 
-from PySide6.QtWidgets import QFormLayout, QSpinBox, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QSpinBox, QWidget
 
+from remotedesktop.autostart import Autostart
 from remotedesktop.config import Settings
 from remotedesktop.performance import PerformanceMonitor
 
@@ -26,10 +29,13 @@ def load_performance_window_seconds(settings: Settings) -> int:
 
 
 class PreferencesTab(QWidget):
+    statusMessage = Signal(str)  # for the window's Connection log pane
+
     def __init__(
         self,
         settings: Settings,
         monitors: PerformanceMonitor | Sequence[PerformanceMonitor],
+        autostart: Autostart | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -39,6 +45,7 @@ class PreferencesTab(QWidget):
         self._monitors = (
             [monitors] if isinstance(monitors, PerformanceMonitor) else list(monitors)
         )
+        self._autostart = autostart if autostart is not None else Autostart()
         self.history_minutes = QSpinBox()
         self.history_minutes.setRange(1, 30)
         self.history_minutes.setSuffix(" min")
@@ -46,11 +53,24 @@ class PreferencesTab(QWidget):
             max(1, round(load_performance_window_seconds(settings) / 60))
         )
         self.history_minutes.valueChanged.connect(self._on_history_changed)
+        self.autostart_checkbox = QCheckBox("Start Remote Desktop when I log in to Windows")
+        self.autostart_checkbox.setChecked(self._autostart.is_enabled())
+        self.autostart_checkbox.setEnabled(self._autostart.available)
+        self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
         layout = QFormLayout(self)
         layout.addRow("Performance history", self.history_minutes)
+        layout.addRow(self.autostart_checkbox)
 
     def _on_history_changed(self, minutes: int) -> None:
         seconds = minutes * 60
         self._settings.set(PERFORMANCE_WINDOW_KEY, str(seconds))
         for monitor in self._monitors:
             monitor.set_window_seconds(float(seconds))
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        self._autostart.set_enabled(checked)
+        self.statusMessage.emit(
+            "Remote Desktop will start at login"
+            if checked
+            else "Remote Desktop will no longer start at login"
+        )
