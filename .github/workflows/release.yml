@@ -1,0 +1,48 @@
+name: Release
+
+# A merged version-bump PR changes src/remotedesktop/__init__.py — the only
+# place the version lives — so a push to master touching it means a new
+# version: tag it v<version> and publish a GitHub release with the built
+# distributions attached. Idempotent: if the release already exists (rerun,
+# or a touch that didn't change the version) it does nothing, so the manual
+# workflow_dispatch trigger is always safe to run. PyPI publishing stays
+# manual (`uv publish`), on explicit request only.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - src/remotedesktop/__init__.py
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Read version
+        id: version
+        # __init__.py is docstring + __version__ only; exec-ing it avoids
+        # installing the package just to read the version.
+        run: |
+          version=$(python3 -c "exec(open('src/remotedesktop/__init__.py').read()); print(__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $tag already exists — nothing to do."
+            exit 0
+          fi
+          uv build
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            dist/*

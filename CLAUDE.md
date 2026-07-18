@@ -22,6 +22,14 @@ change goes through a pull request: branch → push → PR → CI green → merg
 CI publishes the coverage badge to the unprotected `badges` branch (readme
 references it by raw URL), so no workflow ever needs to write to `master`.
 
+**Releases are tagged automatically**: merging a version-bump PR (a change
+to `src/remotedesktop/__init__.py`, the only place the version lives)
+triggers `.github/workflows/release.yml`, which tags `v<version>` and
+creates a GitHub release with generated notes and the built sdist/wheel
+attached. It is idempotent (skips if the release exists) and can be run
+manually via workflow_dispatch. PyPI publishing stays manual (`uv publish`),
+only on the user's explicit request.
+
 ## Commands
 
 Managed with `uv` (hatchling build backend, src layout):
