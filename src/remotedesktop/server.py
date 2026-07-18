@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import time
 
-from PySide6.QtCore import QProcess, Qt
+from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -37,7 +37,7 @@ from remotedesktop.discovery import (
 )
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
-from remotedesktop.modal_loop import ModalLoopPump
+from remotedesktop.modal_loop import HTCLOSE, HTMAXBUTTON, HTMINBUTTON, ModalLoopPump
 from remotedesktop.performance import PerformanceMonitor, PerformanceTab, format_ms, format_rate
 from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
 from remotedesktop.sharing import ShareServer
@@ -167,7 +167,9 @@ class ServerWindow(QMainWindow):
         # drag — including one driven by an injected remote click), Qt stops
         # running; the pump keeps sockets and timers serviced so a remote
         # mouse-up can still arrive and end the drag instead of deadlocking.
-        self._modal_pump = ModalLoopPump()
+        # Caption-button presses (minimize/maximize/close) are handled by
+        # the pump directly — their native tracking loop cannot be pumped.
+        self._modal_pump = ModalLoopPump(caption_action=self._on_caption_button)
         self.restart_button = QPushButton("Restart server")
         self.restart_button.setToolTip(
             "Relaunch this app (e.g. after updating the software). It can be "
@@ -339,8 +341,22 @@ class ServerWindow(QMainWindow):
         title = f'Log from client "{client_name}"' if client_name else "Log from client"
         PeerLogDialog(title, text, self).show()
 
+    def _on_caption_button(self, hit_code: int) -> None:
+        # Deferred: the action (especially close) must not run inside the
+        # native message handler that reported the press.
+        if hit_code == HTMINBUTTON:
+            action = self.showMinimized
+        elif hit_code == HTMAXBUTTON:
+            action = self.showNormal if self.isMaximized() else self.showMaximized
+        elif hit_code == HTCLOSE:
+            action = self.close
+        else:
+            return
+        QTimer.singleShot(0, action)
+
     def nativeEvent(self, event_type, message):
-        self._modal_pump.handle_native_event(event_type, message)
+        if self._modal_pump.handle_native_event(event_type, message):
+            return True, 0
         return super().nativeEvent(event_type, message)
 
     def _ask_approval(self, client_id: str, client_name: str) -> bool:

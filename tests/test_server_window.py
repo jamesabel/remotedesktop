@@ -75,6 +75,33 @@ def test_native_size_move_messages_drive_the_modal_pump(qapp, credentials, tmp_p
         window.close()
 
 
+def test_caption_button_press_minimizes_without_native_tracking(qapp, credentials, tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    from shiboken6 import VoidPtr
+
+    from remotedesktop.modal_loop import HTMINBUTTON, WM_NCLBUTTONDOWN, ModalLoopPump
+    from test_modal_loop import FakeTimers
+
+    window = make_window(credentials, tmp_path)
+    try:
+        timers = FakeTimers()
+        window._modal_pump = ModalLoopPump(
+            pump=lambda: None, caption_action=window._on_caption_button, timers=timers
+        )
+        msg = wintypes.MSG()
+        msg.hWnd, msg.message, msg.wParam = 0xBEEF, WM_NCLBUTTONDOWN, HTMINBUTTON
+        result = window.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+        assert result[0] is True  # consumed: DefWindowProc's tracking never starts
+        assert timers.calls == []  # and the pump never needed to arm
+        for _ in range(5):
+            qapp.processEvents()  # the deferred action runs on the event loop
+        assert window.isMinimized()
+    finally:
+        window.close()
+
+
 def test_window_listens_and_is_discoverable(qapp, credentials, tmp_path):
     window = make_window(credentials, tmp_path)
     try:
