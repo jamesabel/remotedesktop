@@ -88,20 +88,25 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         assert "Remote Desktop started" in window.connection_log.toPlainText()
         tabs = window.centralWidget()
         labels = [tabs.tabText(i) for i in range(tabs.count())]
-        for expected in ("Connections", "Performance", "Preferences", "About"):
+        for expected in ("Server", "Connections", "Performance", "Preferences", "About"):
             assert expected in labels
         assert "Connection log" not in labels  # folded into Connections
+        # With no connection, tab 0 is the "Server" instructions placeholder,
+        # and it is the landing tab.
+        assert labels[0] == "Server"
+        assert tabs.currentIndex() == 0
         # The Connections tab grids sharing status, both peer inventories,
         # and the connection log.
         from PySide6.QtWidgets import QGroupBox
 
+        # Left column: this computer (sharing, log); right: the LAN tables.
         connections_tab = tabs.widget(labels.index("Connections"))
         groups = [g.title() for g in connections_tab.findChildren(QGroupBox)]
         assert groups == [
             "Sharing this computer",
+            "Connection log",
             "Servers on LAN",
             "Clients on LAN",
-            "Connection log",
         ]
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
@@ -943,5 +948,65 @@ def test_preferences_sharing_mode_drives_the_sharing_lifecycle(qapp, credentials
         window.preferences_tab.sharing_off_radio.setChecked(True)
         assert not window.sharing_tab.serving
         assert window._sharing_indicator.isHidden()
+    finally:
+        window.close()
+
+
+def test_server_placeholder_tab_swaps_with_sessions(qapp, credentials, tmp_path):
+    from PySide6.QtWidgets import QLabel, QTabBar
+
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    tabs = window.centralWidget()
+    try:
+        assert tabs.tabText(0) == "Server"
+        label = tabs.widget(0).findChild(QLabel)
+        assert label is not None and "No server connected" in label.text()
+        # The placeholder is not closable.
+        bar = tabs.tabBar()
+        assert bar.tabButton(0, QTabBar.ButtonPosition.RightSide) is None
+        assert bar.tabButton(0, QTabBar.ButtonPosition.LeftSide) is None
+
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        # The session took the placeholder'"'"'s place: tab 0 IS the server now.
+        assert tabs.indexOf(window._no_session_page) == -1
+        assert tabs.tabText(0) == session.name
+        assert "Server" not in [tabs.tabText(i) for i in range(tabs.count())]
+
+        window._on_tab_close_requested(0)
+        assert window._sessions == []
+        assert tabs.tabText(0) == "Server"  # the instructions are back
+        assert tabs.currentIndex() == 0
+    finally:
+        window.close()
+        server.close()
+
+
+def test_own_server_cannot_be_connected(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        own_port = window.sharing_tab.share_server.port
+        own = ServerInfo(name="ME", host="127.0.0.1", port=own_port)
+        other = ServerInfo(name="OTHER", host="127.0.0.1", port=own_port + 1)
+
+        # The window-level entry point refuses outright.
+        window._on_server_activated(own)
+        assert window._sessions == []
+        assert "cannot connect to itself" in window.connection_log.toPlainText()
+
+        # The panel disables Connect for the self row and swallows activation.
+        panel = window.discovery_panel
+        panel._show_results([own, other])
+        activated = []
+        panel.serverActivated.connect(activated.append)
+        panel.server_list.setCurrentRow(0)
+        assert not panel.connect_button.isEnabled()
+        panel._on_item_activated(panel.server_list.item(0))
+        assert activated == []
+        # A normal server keeps working.
+        panel.server_list.setCurrentRow(1)
+        assert panel.connect_button.isEnabled()
     finally:
         window.close()
