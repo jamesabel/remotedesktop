@@ -47,7 +47,11 @@ from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.modal_loop import HTCLOSE, HTMAXBUTTON, HTMINBUTTON, ModalLoopPump
 from remotedesktop.performance import PerformanceMonitor, PerformanceTab
-from remotedesktop.preferences import PreferencesTab, load_performance_window_seconds
+from remotedesktop.preferences import (
+    PreferencesTab,
+    load_clipboard_sync_enabled,
+    load_performance_window_seconds,
+)
 from remotedesktop.server import SharingTab
 from remotedesktop.sharing import ShareClient
 from remotedesktop.single_instance import SingleInstance
@@ -89,8 +93,10 @@ class MainWindow(QMainWindow):
         # One OS clipboard, one sync, shared by both roles: a real local copy
         # fans out to connected servers and own viewers; a payload received
         # from a peer is applied with its signature recorded first, so it
-        # never re-emits `changed` and cannot loop between the roles.
+        # never re-emits `changed` and cannot loop between the roles. The
+        # persisted Preferences opt-out applies from the first moment.
         self._clipboard = ClipboardSync(parent=self)
+        self._clipboard.enabled = load_clipboard_sync_enabled(self._settings)
         self._known_servers = KnownServers(self._db)
         self._identity = load_client_identity(self._db)
         self._tray_available = (
@@ -114,6 +120,7 @@ class MainWindow(QMainWindow):
         self.sharing_tab.statusMessage.connect(self.log)
         self.sharing_tab.peerEvent.connect(self._record_server_peer)
         self.sharing_tab.sharingChanged.connect(self._on_sharing_changed)
+        self.sharing_tab.viewerCountChanged.connect(self._update_sharing_indicator)
         self.sharing_tab.restartRequested.connect(self._restart_app)
 
         # One tab per server connection (inserted at the front, closable),
@@ -190,6 +197,7 @@ class MainWindow(QMainWindow):
             self._settings,
             [self.client_performance, self.server_performance],
             autostart=autostart,
+            clipboard=self._clipboard,
         )
         self.preferences_tab.statusMessage.connect(self.log)
         self._tabs.addTab(self.preferences_tab, "Preferences")
@@ -216,6 +224,11 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._update_window_title()
+        # Permanent right-side indicator: sharing state at a glance whatever
+        # tab is current (the message area follows the selected session).
+        self._sharing_indicator = QLabel()
+        self._sharing_indicator.hide()
+        self.statusBar().addPermanentWidget(self._sharing_indicator)
         self.statusBar().showMessage("Not connected")
         window_state.restore_geometry(self, self._settings, window_state.MAIN_GEOMETRY_KEY)
         window_state.restore_state(self, self._settings, window_state.MAIN_STATE_KEY)
@@ -417,6 +430,15 @@ class MainWindow(QMainWindow):
         ):
             self.bring_to_front()
 
+    def _update_sharing_indicator(self, count: int) -> None:
+        if not self.sharing_tab.serving:
+            self._sharing_indicator.hide()
+            return
+        self._sharing_indicator.setText(
+            f"Sharing — {count} viewer(s)" if count else "Sharing — no viewers"
+        )
+        self._sharing_indicator.show()
+
     def _on_sharing_changed(self, serving: bool) -> None:
         if serving:
             self._ensure_tray()
@@ -454,6 +476,23 @@ class MainWindow(QMainWindow):
                     "Use the tray icon to reopen or quit.",
                 )
             return
+        # Really quitting: with viewers connected, stopping their stream
+        # deserves a confirmation (restart has its own, and shuts sharing
+        # down first, so it never double-prompts here).
+        viewer_count = self.sharing_tab.viewer_count
+        if self.sharing_tab.serving and viewer_count > 0:
+            if self.isHidden():
+                self.bring_to_front()  # the question must be visible
+            answer = QMessageBox.question(
+                self,
+                "Quit",
+                f"{viewer_count} viewer(s) are connected to this computer — "
+                "quit and stop sharing?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._quitting = False
+                event.ignore()
+                return
         for session in self._sessions:
             self._cancel_reconnect(session)
             session.client.close()

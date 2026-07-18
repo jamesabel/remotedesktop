@@ -844,3 +844,75 @@ def test_discovery_panel_connect_button_and_selection_preservation(qapp):
     assert panel.selected_server() == second
     panel.connect_button.click()
     assert activated == [second]
+
+
+def test_sharing_indicator_lifecycle(qapp, credentials, tmp_path, monkeypatch):
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    serving = make_window(tmp_path, credentials, serving=True, db_name="serving.db")
+    viewing = make_window(tmp_path, db_name="viewing.db")
+    try:
+        assert serving._sharing_indicator.text() == "Sharing — no viewers"
+        assert not serving._sharing_indicator.isHidden()
+        assert viewing._sharing_indicator.isHidden()  # not sharing
+
+        port = serving.sharing_tab.share_server.port
+        viewing.discovery_panel.serverActivated.emit(
+            ServerInfo(name="box", host="127.0.0.1", port=port)
+        )
+        session = viewing._sessions[0]
+        pump(qapp, lambda: session.connected)
+        pump(qapp, lambda: serving._sharing_indicator.text() == "Sharing — 1 viewer(s)")
+
+        serving.sharing_tab.share_checkbox.setChecked(False)
+        assert serving._sharing_indicator.isHidden()
+    finally:
+        viewing.close()
+        serving.close()
+
+
+def test_quit_with_viewers_asks_for_confirmation(qapp, credentials, tmp_path, monkeypatch):
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    serving = make_window(tmp_path, credentials, serving=True, db_name="serving.db")
+    viewing = make_window(tmp_path, db_name="viewing.db")
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    try:
+        port = serving.sharing_tab.share_server.port
+        viewing.discovery_panel.serverActivated.emit(
+            ServerInfo(name="box", host="127.0.0.1", port=port)
+        )
+        pump(qapp, lambda: viewing._sessions and viewing._sessions[0].connected)
+        pump(qapp, lambda: serving.sharing_tab.viewer_count == 1)
+
+        # Declining keeps the app running and still sharing.
+        monkeypatch.setattr(
+            QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+        )
+        serving._quit()
+        assert quits == []
+        assert serving.sharing_tab.serving
+        assert not serving._quitting
+
+        # Accepting quits and stops sharing.
+        monkeypatch.setattr(
+            QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+        )
+        serving._quit()
+        assert quits == [True]
+        assert serving.sharing_tab.share_server is None
+    finally:
+        viewing.close()
+        serving.close()
+
+
+def test_quit_without_viewers_never_prompts(qapp, credentials, tmp_path, monkeypatch):
+    serving = make_window(tmp_path, credentials, serving=True)
+    quits = []
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+
+    def prompted(*_args, **_kwargs):
+        raise AssertionError("must not prompt with zero viewers")
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(prompted))
+    serving._quit()
+    assert quits == [True]

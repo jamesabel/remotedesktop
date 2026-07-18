@@ -407,3 +407,46 @@ def test_viewers_table_flags_a_major_version_mismatch(qapp):
         assert item is not None
         cells.append(item.text())
     assert cells == [__version__, "99.0.0 ⚠", "—"]
+
+
+def test_allow_input_checkbox_persists_and_applies(qapp, credentials, tmp_path):
+    tab = make_tab(credentials, tmp_path, enabled=False)
+    try:
+        assert tab.allow_input_checkbox.isChecked()  # default: viewers control
+        tab.allow_input_checkbox.setChecked(False)
+        assert tab._settings.get(SharingTab.ALLOW_INPUT_KEY) == "0"
+        assert any("watch but not control" in m for m in tab.messages)
+
+        tab.share_checkbox.setChecked(True)  # starts sharing with input off
+        assert tab.share_server._input_allowed is False
+        tab.allow_input_checkbox.setChecked(True)  # live re-enable
+        assert tab.share_server._input_allowed is True
+        assert any("Remote input enabled" in m for m in tab.messages)
+
+        # Persisted: a fresh tab on the same DB starts unchecked.
+        tab.allow_input_checkbox.setChecked(False)
+    finally:
+        tab.shutdown()
+
+
+def test_viewer_count_signal_follows_connections(qapp, credentials, tmp_path, monkeypatch):
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    tab = make_tab(credentials, tmp_path)
+    counts = []
+    tab.viewerCountChanged.connect(counts.append)
+    client = make_client(tmp_path)
+    names = []
+    client.connected.connect(names.append)
+    client.connect_to("127.0.0.1", tab.share_server.port)
+    try:
+        pump(qapp, lambda: names)
+        pump(qapp, lambda: 1 in counts)
+        assert tab.viewer_count == 1
+        client.close()
+        pump(qapp, lambda: counts and counts[-1] == 0)
+        tab.share_checkbox.setChecked(False)
+        assert tab.viewer_count == 0
+        assert counts[-1] == 0
+    finally:
+        client.close()
+        tab.shutdown()

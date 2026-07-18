@@ -176,3 +176,24 @@ def test_data_changed_while_applying_is_ignored(qapp):
     sync._applying = True
     sync._on_data_changed()
     assert emitted == []
+
+
+def test_disabled_sync_neither_sends_nor_applies(qapp):
+    clip = qapp.clipboard()
+    sync = ClipboardSync(clip)
+    emitted: list[dict] = []
+    sync.changed.connect(emitted.append)
+    sync.enabled = False
+    clip.setText("disabled-copy")
+    for _ in range(10):
+        qapp.processEvents()
+    assert emitted == []  # local copies are not sent
+    sync.apply({"type": "clipboard", "text": "should-not-apply"})
+    for _ in range(5):
+        qapp.processEvents()
+    assert clip.text() == "disabled-copy"  # peer payloads are not applied
+    # Re-enabled: local copies flow again.
+    sync.enabled = True
+    clip.setText("enabled-copy")
+    pump(qapp, lambda: emitted)
+    assert emitted[-1]["text"] == "enabled-copy"

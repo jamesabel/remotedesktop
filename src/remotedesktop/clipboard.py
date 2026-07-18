@@ -39,10 +39,16 @@ class ClipboardSync(QObject):
         self._clipboard = clipboard or QGuiApplication.clipboard()
         self._applying = False
         self._last_signature: tuple[str | None, str | None] | None = None
+        # The Preferences toggle: while disabled, local copies are not sent
+        # (`changed` never emits) and peer payloads are not applied. Note
+        # that after re-enabling, the last recorded signature may suppress
+        # one re-copy of identical content — same class of behavior as the
+        # normal echo prevention.
+        self.enabled = True
         self._clipboard.dataChanged.connect(self._on_data_changed)
 
     def _on_data_changed(self) -> None:
-        if self._applying:
+        if self._applying or not self.enabled:
             return
         text = self._clipboard.text() or None
         image = self._clipboard.image()
@@ -64,6 +70,8 @@ class ClipboardSync(QObject):
         self.changed.emit(payload)
 
     def apply(self, payload: dict) -> None:
+        if not self.enabled:
+            return  # peers may still send payloads; they are dropped locally
         text = payload.get("text")
         text = text if isinstance(text, str) else None
         image = None
