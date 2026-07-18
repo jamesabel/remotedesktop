@@ -15,7 +15,7 @@ import sys
 import time
 
 from PySide6.QtCore import QProcess, Qt, QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication,
@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget()
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
-        self._tabs.currentChanged.connect(lambda _index: self._refresh_status_bar())
+        self._tabs.currentChanged.connect(self._on_current_tab_changed)
         # One "Server" tab holds everything server-related: the sharing
         # opt-in with its viewers, plus both peer inventories.
         server_tab = QWidget()
@@ -147,9 +147,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._tabs)
 
         self.discovery_panel = DiscoveryPanel(self, is_self=self._is_own_server)
-        servers_dock = QDockWidget("Servers", self)
-        servers_dock.setWidget(self.discovery_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, servers_dock)
+        self.servers_dock = QDockWidget("Servers", self)
+        # An object name is required for saveState() to persist the dock.
+        self.servers_dock.setObjectName("servers_dock")
+        self.servers_dock.setWidget(self.discovery_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
 
         self.connection_log = QPlainTextEdit(self)
         self.connection_log.setReadOnly(True)
@@ -177,7 +179,8 @@ class MainWindow(QMainWindow):
         )
         self.preferences_tab.statusMessage.connect(self.log)
         self._tabs.addTab(self.preferences_tab, "Preferences")
-        self._tabs.addTab(AboutTab(), "About")
+        self._about_tab = AboutTab()
+        self._tabs.addTab(self._about_tab, "About")
         # Only session tabs are closable; strip the buttons the fixed tabs
         # got from setTabsClosable (styles place them on either side).
         bar = self._tabs.tabBar()
@@ -197,9 +200,11 @@ class MainWindow(QMainWindow):
         # pump directly — their native tracking loop cannot be pumped.
         self._modal_pump = ModalLoopPump(caption_action=self._on_caption_button)
 
+        self._build_menus()
         self._update_window_title()
         self.statusBar().showMessage("Not connected")
         window_state.restore_geometry(self, self._settings, window_state.MAIN_GEOMETRY_KEY)
+        window_state.restore_state(self, self._settings, window_state.MAIN_STATE_KEY)
         self.log("Remote Desktop started")
         # Now that the log pane, tray state, and signal wiring exist, start
         # sharing if the persisted opt-in is on.
@@ -217,6 +222,55 @@ class MainWindow(QMainWindow):
         self.connection_log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {message}")
 
     # ------------------------------------------------------- window chrome
+
+    def _build_menus(self) -> None:
+        # Menus and actions are kept as attributes: PySide6 gives the Python
+        # wrapper ownership of objects returned by addMenu/addAction, so a
+        # garbage-collected local would delete the underlying C++ object.
+        bar = self.menuBar()
+        self._file_menu = bar.addMenu("&File")
+        self.restart_action = self._file_menu.addAction("&Restart app…")
+        self.restart_action.triggered.connect(self._restart_app)
+        self.close_tab_action = self._file_menu.addAction("&Close tab")
+        self.close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
+        self.close_tab_action.triggered.connect(self._close_current_session_tab)
+        self.close_tab_action.setEnabled(False)  # startup tab is a fixed tab
+        self._file_menu.addSeparator()
+        self.quit_action = self._file_menu.addAction("&Quit")
+        self.quit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        self.quit_action.triggered.connect(self._quit)
+        self._view_menu = bar.addMenu("&View")
+        # The dock's own toggle action: the way back after closing the panel.
+        self.servers_panel_action = self.servers_dock.toggleViewAction()
+        self.servers_panel_action.setText("&Servers panel")
+        self._view_menu.addAction(self.servers_panel_action)
+        self.refresh_action = self._view_menu.addAction("&Refresh server list")
+        self.refresh_action.setShortcut(QKeySequence("F5"))
+        self.refresh_action.triggered.connect(self.discovery_panel.refresh)
+        self._help_menu = bar.addMenu("&Help")
+        self.about_action = self._help_menu.addAction("&About")
+        self.about_action.triggered.connect(
+            lambda: self._tabs.setCurrentWidget(self._about_tab)
+        )
+        # Register shortcut actions on the window itself so they keep firing
+        # when the menu bar is hidden (fullscreen). While a viewer has a
+        # frame and focus, its ShortcutOverride handling forwards these keys
+        # to the remote machine instead — F11 is the one reserved local key.
+        for action in (self.close_tab_action, self.quit_action, self.refresh_action):
+            self.addAction(action)
+
+    def _on_current_tab_changed(self, _index: int) -> None:
+        self._refresh_status_bar()
+        close_action = getattr(self, "close_tab_action", None)
+        if close_action is not None:  # menus are built after the tabs
+            close_action.setEnabled(
+                self._session_for_viewer(self._tabs.currentWidget()) is not None
+            )
+
+    def _close_current_session_tab(self) -> None:
+        session = self._session_for_viewer(self._tabs.currentWidget())
+        if session is not None:
+            self._close_session(session)
 
     def _update_window_title(self) -> None:
         """Connected server names lead the title, so the taskbar (and a
@@ -279,6 +333,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         window_state.save_geometry(self, self._settings, window_state.MAIN_GEOMETRY_KEY)
+        window_state.save_state(self, self._settings, window_state.MAIN_STATE_KEY)
         if self.sharing_tab.serving and self._tray is not None and not self._quitting:
             # Sharing continues in the background; the tray icon is the way
             # back in (or out).

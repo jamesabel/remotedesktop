@@ -252,3 +252,27 @@ def test_viewer_paints_message_and_frame(qapp):
     assert painted.pixelColor(200, 200).red() > 200  # frame center is red
     viewer.clear("gone")
     assert not viewer.has_frame
+
+
+def test_shortcut_override_forwards_keys_only_while_a_frame_is_shown(qapp):
+    from PySide6.QtWidgets import QApplication
+
+    viewer = ViewerWidget()
+
+    def override_accepted(key, modifiers=Qt.KeyboardModifier.NoModifier):
+        event = QKeyEvent(QEvent.Type.ShortcutOverride, key, modifiers)
+        event.ignore()  # Qt sends overrides unaccepted; accepting claims the key
+        QApplication.sendEvent(viewer, event)
+        return event.isAccepted()
+
+    # No frame: local shortcuts must work normally.
+    assert not override_accepted(Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+    viewer.show_frame(QImage(8, 8, QImage.Format.Format_RGB32))
+    # With a frame: keys are claimed for the remote machine.
+    assert override_accepted(Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+    assert override_accepted(Qt.Key.Key_Q, Qt.KeyboardModifier.ControlModifier)
+    assert override_accepted(Qt.Key.Key_F5)
+    # F11 is the single key reserved for the local app (fullscreen).
+    assert not override_accepted(Qt.Key.Key_F11)
+    viewer.clear()
+    assert not override_accepted(Qt.Key.Key_F5)
