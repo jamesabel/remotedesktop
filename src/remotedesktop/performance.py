@@ -93,6 +93,35 @@ class MetricSeries:
         while self._samples and self._samples[0][0] < cutoff:
             self._samples.popleft()
 
+    def statistics(self) -> dict | None:
+        """`sample_statistics` over the samples still in the window."""
+        return sample_statistics([value for _t, value in self.samples()])
+
+
+def sample_statistics(values: list[float]) -> dict | None:
+    """Summary statistics for a sample list, or None when it is empty:
+    {"count", "mean", "min", "max", "p99", "jitter"}. Jitter is the mean
+    absolute difference of *consecutive* samples (the classic packet-jitter
+    definition), so a steady 100 ms link has zero jitter while one bouncing
+    1↔100 ms scores high; p99 is nearest-rank."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    count = len(values)
+    jitter = (
+        sum(abs(b - a) for a, b in zip(values, values[1:])) / (count - 1)
+        if count > 1
+        else 0.0
+    )
+    return {
+        "count": count,
+        "mean": sum(values) / count,
+        "min": ordered[0],
+        "max": ordered[-1],
+        "p99": ordered[max(0, math.ceil(0.99 * count) - 1)],
+        "jitter": jitter,
+    }
+
 
 class PerformanceMonitor(QObject):
     """Samples bandwidth and measures RTT for the attached streams.
@@ -358,6 +387,7 @@ class GraphWidget(QWidget):
         format_value: Callable[[float], str],
         *,
         tick_unit: Callable[[float], float] = lambda _value: 1.0,
+        show_stats: bool = False,
         clock: Callable[[], float] = time.monotonic,
         parent: QWidget | None = None,
     ) -> None:
@@ -370,8 +400,12 @@ class GraphWidget(QWidget):
         # the axis ceiling is a round number of that unit (100 KB/s, not the
         # 97.7 KB/s that a round number of bytes/s would render as).
         self._tick_unit = tick_unit
+        # One extra bottom row per series with window statistics
+        # (mean/min/max/p99/jitter) — used by the round-trip-time graph.
+        self._show_stats = show_stats
         self._clock = clock
-        self.setMinimumSize(300, 140)  # room for the axis-label rows
+        extra_rows = len(series) if show_stats else 0
+        self.setMinimumSize(300, 140 + extra_rows * self.fontMetrics().height())
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -403,7 +437,10 @@ class GraphWidget(QWidget):
         y_ticks = [y_max * i / _GRID_DIVISIONS for i in range(_GRID_DIVISIONS + 1)]
         y_labels = [self._format_value(v) for v in y_ticks]
         left = 8 + max(metrics.horizontalAdvance(t) for t in y_labels) + 6
-        graph = self.rect().adjusted(left, 24, -12, -(2 * metrics.height() + 12))
+        # Bottom rows: X tick labels, legend, then (optionally) one
+        # statistics line per series.
+        bottom_rows = 2 + (len(self._series) if self._show_stats else 0)
+        graph = self.rect().adjusted(left, 24, -12, -(bottom_rows * metrics.height() + 10))
 
         grid_color = palette.color(palette.ColorRole.Mid)
         grid_pen = QPen(grid_color, 0, Qt.PenStyle.DotLine)
@@ -430,10 +467,11 @@ class GraphWidget(QWidget):
             text_x = min(max(x - width / 2, graph.left()), graph.right() - width)
             painter.setPen(text_color)
             painter.drawText(round(text_x), x_label_baseline, label)
+        legend_baseline = x_label_baseline + metrics.height()
         caption = "seconds ago"
         painter.drawText(
             self.rect().right() - 8 - metrics.horizontalAdvance(caption),
-            self.rect().bottom() - 6,
+            legend_baseline,
             caption,
         )
 
@@ -448,14 +486,30 @@ class GraphWidget(QWidget):
             painter.setPen(color)
             painter.drawPolyline(polyline)
 
-        # Legend with latest values along the bottom edge.
+        # Legend with latest values, then one statistics row per series.
         x = graph.left()
         for label, color, samples in data:
             latest = samples[-1][1] if samples else None
             text = f"{label} {self._format_value(latest)}" if latest is not None else f"{label} —"
             painter.setPen(color)
-            painter.drawText(round(x), self.rect().bottom() - 6, text)
+            painter.drawText(round(x), legend_baseline, text)
             x += metrics.horizontalAdvance(text) + 16
+        if self._show_stats:
+            baseline = legend_baseline
+            fmt = self._format_value
+            for label, color, samples in data:
+                baseline += metrics.height()
+                stats = sample_statistics([value for _t, value in samples])
+                if stats is None:
+                    text = f"{label}: no data in window"
+                else:
+                    text = (
+                        f"{label}:  mean {fmt(stats['mean'])} · min {fmt(stats['min'])}"
+                        f" · max {fmt(stats['max'])} · p99 {fmt(stats['p99'])}"
+                        f" · jitter {fmt(stats['jitter'])} · n={stats['count']}"
+                    )
+                painter.setPen(color)
+                painter.drawText(graph.left(), baseline, text)
 
 
 class PerformanceTab(QWidget):
@@ -497,6 +551,7 @@ class PerformanceTab(QWidget):
             ],
             monitor,
             format_ms,
+            show_stats=True,
         )
         layout = QVBoxLayout(self)
         layout.addWidget(self.bandwidth_graph, stretch=1)
