@@ -159,11 +159,13 @@ class PerformanceMonitor(QObject):
         self.peer_rtt_ms = MetricSeries(window_seconds, clock=clock)
         self._streams: list[StreamLike] = []
         self._baselines: dict[StreamLike, tuple[int, int]] = {}
-        # Latest per-stream numbers (for the server's viewers table); the
-        # rolling series above stay aggregate/active-stream only.
+        # Per-stream numbers (for the server's viewers table); the rolling
+        # series above stay aggregate/active-stream only. RTT keeps a full
+        # window-following series per stream so the table can show window
+        # statistics, not just the latest sample.
         self._stream_send_bps: dict[StreamLike, float] = {}
         self._stream_recv_bps: dict[StreamLike, float] = {}
-        self._stream_rtt: dict[StreamLike, float] = {}
+        self._stream_rtt: dict[StreamLike, MetricSeries] = {}
         self._stream_peer_rtt: dict[StreamLike, float] = {}
         self._active: StreamLike | None = None
         # Dead-connection detection, all scoped to the active stream: when its
@@ -191,6 +193,8 @@ class PerformanceMonitor(QObject):
     def set_window_seconds(self, window_seconds: float) -> None:
         self._window = window_seconds
         for series in (self.send_bps, self.recv_bps, self.rtt_ms, self.peer_rtt_ms):
+            series.set_window(window_seconds)
+        for series in self._stream_rtt.values():
             series.set_window(window_seconds)
 
     def add_stream(self, stream: StreamLike) -> None:
@@ -224,13 +228,17 @@ class PerformanceMonitor(QObject):
             self._last_tick = None
 
     def metrics_for(self, stream: StreamLike) -> dict:
-        """Latest numbers for one attached stream (None where not yet
-        measured): {"send_bps", "recv_bps", "rtt_ms", "peer_rtt_ms"}."""
+        """Numbers for one attached stream (None where not yet measured):
+        {"send_bps", "recv_bps", "rtt_ms", "peer_rtt_ms", "rtt_stats"} —
+        rtt_ms is the latest sample, rtt_stats the `sample_statistics`
+        summary over the rolling window."""
+        rtt_series = self._stream_rtt.get(stream)
         return {
             "send_bps": self._stream_send_bps.get(stream),
             "recv_bps": self._stream_recv_bps.get(stream),
-            "rtt_ms": self._stream_rtt.get(stream),
+            "rtt_ms": rtt_series.latest() if rtt_series is not None else None,
             "peer_rtt_ms": self._stream_peer_rtt.get(stream),
+            "rtt_stats": rtt_series.statistics() if rtt_series is not None else None,
         }
 
     def _activate(self, stream: StreamLike | None) -> None:
@@ -268,7 +276,12 @@ class PerformanceMonitor(QObject):
                     # Only honor a pong arriving on the stream it was sent to.
                     if pending is not None and pending[0] is stream:
                         rtt_ms = (self._clock() - pending[1]) * 1000.0
-                        self._stream_rtt[stream] = rtt_ms
+                        series = self._stream_rtt.get(stream)
+                        if series is None:
+                            series = self._stream_rtt[stream] = MetricSeries(
+                                self._window, clock=self._clock
+                            )
+                        series.add(rtt_ms)
                         if stream is self._active:
                             self.rtt_ms.add(rtt_ms)
 
@@ -304,7 +317,8 @@ class PerformanceMonitor(QObject):
             ping_id = next(self._ids)
             self._pending[ping_id] = (stream, now)
             ping: dict = {"type": "ping", "id": ping_id}
-            if (rtt := self._stream_rtt.get(stream)) is not None:
+            series = self._stream_rtt.get(stream)
+            if series is not None and (rtt := series.latest()) is not None:
                 ping["rtt"] = rtt
             stream.send_json(ping)
 
@@ -442,8 +456,11 @@ class GraphWidget(QWidget):
         bottom_rows = 2 + (len(self._series) if self._show_stats else 0)
         graph = self.rect().adjusted(left, 24, -12, -(bottom_rows * metrics.height() + 10))
 
+        # Solid but translucent: dotted lines all but vanished on high-DPI
+        # displays, where the dots land between device pixels.
         grid_color = palette.color(palette.ColorRole.Mid)
-        grid_pen = QPen(grid_color, 0, Qt.PenStyle.DotLine)
+        grid_color.setAlpha(150)
+        grid_pen = QPen(grid_color, 0)
         text_color = palette.color(palette.ColorRole.Text)
         for value, label in zip(y_ticks, y_labels):
             y = graph.bottom() - graph.height() * (value / y_max)

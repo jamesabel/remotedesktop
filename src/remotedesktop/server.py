@@ -54,11 +54,16 @@ class ViewersTable(QTableWidget):
     tick — but only while visible (background tabs schedule no work).
     """
 
-    _COLUMNS = ["Name", "Address", "User", "Computer", "OS", "Send", "Receive", "Round trip"]
-    # Send / Receive / Round trip: their text changes every tick, so they
-    # get a constant width (sized to the widest plausible value) instead of
+    _COLUMNS = [
+        "Name", "Address", "User", "Computer", "OS", "Send", "Receive",
+        "RTT", "RTT mean", "RTT min", "RTT max", "RTT p99", "RTT jitter",
+    ]
+    # Metric cells change text every tick, so their columns get a constant
+    # width (sized to the widest plausible value) instead of
     # ResizeToContents — otherwise the columns visibly jitter each second.
-    _METRIC_COLUMNS = (5, 6, 7)
+    _RATE_COLUMNS = (5, 6)  # Send / Receive
+    _MS_COLUMNS = (7, 8, 9, 10, 11, 12)  # RTT latest + window statistics
+    _METRIC_COLUMNS = _RATE_COLUMNS + _MS_COLUMNS
 
     def __init__(self, share_server, performance: PerformanceMonitor, parent=None) -> None:
         # One extra headerless column takes the stretch so the data columns
@@ -71,10 +76,11 @@ class ViewersTable(QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
-        metric_width = self.fontMetrics().horizontalAdvance("9999.9 MB/s") + 24
+        rate_width = self.fontMetrics().horizontalAdvance("9999.9 MB/s") + 24
+        ms_width = self.fontMetrics().horizontalAdvance("9999.9 ms") + 24
         for column in self._METRIC_COLUMNS:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
-            self.setColumnWidth(column, metric_width)
+            self.setColumnWidth(column, rate_width if column in self._RATE_COLUMNS else ms_width)
         self._share_server = share_server
         self._performance = performance
         share_server.clientCountChanged.connect(self._on_count_changed)
@@ -98,6 +104,7 @@ class ViewersTable(QTableWidget):
         for row, viewer in enumerate(viewers):
             metrics = self._performance.metrics_for(viewer["stream"])
             send, recv, rtt = metrics["send_bps"], metrics["recv_bps"], metrics["rtt_ms"]
+            stats = metrics["rtt_stats"] or {}
             values = [
                 viewer["name"] or "(unknown)",
                 viewer["address"],
@@ -107,6 +114,9 @@ class ViewersTable(QTableWidget):
                 format_rate(send) if send is not None else "—",
                 format_rate(recv) if recv is not None else "—",
                 format_ms(rtt) if rtt is not None else "—",
+            ] + [
+                format_ms(stats[key]) if key in stats else "—"
+                for key in ("mean", "min", "max", "p99", "jitter")
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
