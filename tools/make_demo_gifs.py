@@ -62,19 +62,28 @@ _CODE_LINES = [
 
 class SyntheticDesktop:
     """Draws an animated fake desktop: wallpaper, an editor window with
-    scrolling code, a terminal appending lines, a clock, a gliding cursor."""
+    scrolling code, a terminal appending lines, a clock, a gliding cursor.
 
-    def __init__(self) -> None:
+    The gradient colors distinguish the two demo servers' desktops at a
+    glance when the client shows one tab per server."""
+
+    def __init__(
+        self,
+        gradient: tuple[tuple[int, int, int], tuple[int, int, int]] = (
+            (16, 42, 84),
+            (52, 18, 90),
+        ),
+    ) -> None:
         self._start = time.monotonic()
-        self._background = self._draw_background()
+        self._background = self._draw_background(gradient)
 
     @staticmethod
-    def _draw_background() -> QImage:
+    def _draw_background(colors: tuple[tuple[int, int, int], tuple[int, int, int]]) -> QImage:
         image = QImage(SCREEN_W, SCREEN_H, QImage.Format.Format_RGB32)
         painter = QPainter(image)
         gradient = QLinearGradient(0, 0, SCREEN_W, SCREEN_H)
-        gradient.setColorAt(0.0, QColor(16, 42, 84))
-        gradient.setColorAt(1.0, QColor(52, 18, 90))
+        gradient.setColorAt(0.0, QColor(*colors[0]))
+        gradient.setColorAt(1.0, QColor(*colors[1]))
         painter.fillRect(0, 0, SCREEN_W, SCREEN_H, gradient)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -237,6 +246,18 @@ def main() -> None:
         desktop = SyntheticDesktop()
         server_window.share_server._capture = desktop.grab  # the test seam  # ty: ignore[invalid-assignment]
 
+        # A second, window-less server ("LAB-PC", teal desktop) so the client
+        # demo shows one tab per connected server.
+        lab_db = db.connect(tmp_path / "lab.db")
+        lab_server = sharing.ShareServer(
+            approve_client=lambda _cid, _name: True,
+            credentials=credentials,
+            paired=PairedClients(lab_db),
+        )
+        lab_desktop = SyntheticDesktop(gradient=((10, 62, 52), (14, 34, 78)))
+        lab_server._capture = lab_desktop.grab  # ty: ignore[invalid-assignment]
+        assert lab_server.listen(0)
+
         client_db = db.connect(tmp_path / "client.db")
         client_settings = Settings(client_db)
         client_settings.set("client_id", str(uuid.uuid4()))
@@ -249,17 +270,25 @@ def main() -> None:
             window.show()
 
         info = ServerInfo(name="DEN-PC", host="127.0.0.1", port=server_window.share_server.port)
-        client_module.discover_servers = lambda: [info]  # ty: ignore[invalid-assignment]
+        lab_info = ServerInfo(name="LAB-PC", host="127.0.0.1", port=lab_server.port)
+        client_module.discover_servers = lambda: [info, lab_info]  # ty: ignore[invalid-assignment]
         client_tabs = client_window.centralWidget()
         server_tabs = server_window.centralWidget()
         assert isinstance(client_tabs, QTabWidget) and isinstance(server_tabs, QTabWidget)
 
         # The live remote-screen section is the product's whole point, so it
-        # gets the lion's share of the runtime (~19 s of streaming before
-        # the brief Performance-tab detour, plus the closing shot).
+        # gets the lion's share of the runtime: DEN-PC streams alone first,
+        # then LAB-PC joins (one tab per server) and the demo flips between
+        # the two tabs before the brief Performance detour and closing shot.
+        # gethostname is swapped just before the second connection so LAB-PC's
+        # welcome reports its own name (it is read at admission time).
         script = [
             (0.8, lambda: client_window.discovery_panel.refresh()),
             (2.0, lambda: client_window.discovery_panel.serverActivated.emit(info)),
+            (7.0, lambda: setattr(socket, "gethostname", lambda: "LAB-PC")),
+            (7.2, lambda: client_window.discovery_panel.serverActivated.emit(lab_info)),
+            (13.0, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "DEN-PC"))),
+            (17.0, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "LAB-PC"))),
             (21.2, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Performance"))),
             (21.6, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Performance"))),
             (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "DEN-PC"))),
@@ -283,10 +312,12 @@ def main() -> None:
         save_gif(server_frames, out_dir / "server-demo.gif")
         client_window.close()
         server_window.close()
+        lab_server.close()
         app.processEvents()
         # The temp dir can't be removed while the SQLite files are open.
         client_db.close()
         server_db.close()
+        lab_db.close()
 
 
 if __name__ == "__main__":
