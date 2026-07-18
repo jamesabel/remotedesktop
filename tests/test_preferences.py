@@ -66,3 +66,27 @@ def test_autostart_checkbox_toggles_registration(qapp, tmp_path):
         assert not autostart.is_enabled()
     finally:
         autostart.set_enabled(False)
+
+
+def test_clipboard_toggle_persists_and_applies_live(qapp, tmp_path):
+    from remotedesktop.preferences import CLIPBOARD_SYNC_KEY, load_clipboard_sync_enabled
+
+    class RecordingSync:
+        enabled = True
+
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    clipboard = RecordingSync()
+    tab = PreferencesTab(
+        settings, PerformanceMonitor(), autostart=make_autostart(), clipboard=clipboard
+    )
+    messages = []
+    tab.statusMessage.connect(messages.append)
+    assert tab.clipboard_checkbox.isChecked()  # default on
+    tab.clipboard_checkbox.setChecked(False)
+    assert settings.get(CLIPBOARD_SYNC_KEY) == "0"
+    assert clipboard.enabled is False
+    assert any("disabled" in m for m in messages)
+    # A fresh tab (restart) reads the persisted off state.
+    tab2 = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+    assert not tab2.clipboard_checkbox.isChecked()
+    assert not load_clipboard_sync_enabled(settings)

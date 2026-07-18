@@ -298,3 +298,37 @@ def test_actual_size_mode_sizes_viewer_to_frame_and_maps_input_one_to_one(qapp):
     # Back to fit mode restores the minimum size.
     viewer.set_actual_size(False)
     assert viewer.minimumSize() == QSize(320, 240)
+
+
+def test_view_only_drops_input_and_releases_held_keys(qapp, credentials, tmp_path):
+    import time
+
+    injector = RecordingInjector()
+    server = make_server(credentials, tmp_path, approve=lambda *_: True, injector=injector)
+    client = make_client(tmp_path)
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.send_input({"action": "key", "vk": 65, "pressed": True})
+        pump(qapp, lambda: ("key", 65, True) in injector.calls)
+
+        server.set_input_allowed(False)
+        # Turning input off released the key the viewer still held.
+        assert ("key", 65, False) in injector.calls
+        baseline = len(injector.calls)
+        client.send_input({"action": "move", "x": 0.5, "y": 0.5})
+        client.send_input({"action": "key", "vk": 66, "pressed": True})
+        deadline = time.monotonic() + 0.4
+        while time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert len(injector.calls) == baseline  # view-only: nothing injected
+
+        server.set_input_allowed(True)
+        client.send_input({"action": "key", "vk": 67, "pressed": True})
+        pump(qapp, lambda: ("key", 67, True) in injector.calls)
+    finally:
+        client.close()
+        server.close()

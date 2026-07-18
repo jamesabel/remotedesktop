@@ -118,9 +118,11 @@ class ShareServer(QObject):
         clipboard=None,
         performance: PerformanceMonitor | None = None,
         log_provider: Callable[[], str] | None = None,
+        input_allowed: bool = True,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
+        self._input_allowed = input_allowed
         self._performance = performance
         self._log_provider = log_provider
         self._approve_client = approve_client
@@ -187,6 +189,30 @@ class ShareServer(QObject):
     @property
     def port(self) -> int:
         return self._server.serverPort()
+
+    @property
+    def client_count(self) -> int:
+        """Admitted viewers currently connected."""
+        return len(self._streams)
+
+    def set_input_allowed(self, allowed: bool) -> None:
+        """View-only toggle: while disallowed, remote input is dropped.
+
+        Turning it off releases anything viewers still hold down, so a
+        mid-drag or mid-keystroke toggle leaves no stuck input behind.
+        """
+        if self._input_allowed == allowed:
+            return
+        self._input_allowed = allowed
+        if allowed:
+            self.status.emit("Remote input enabled — viewers can control this computer")
+            return
+        for stream in list(self._pressed):
+            self._release_input(stream)
+        self._controllers.clear()
+        self.status.emit(
+            "Remote input disabled — viewers can watch but not control this computer"
+        )
 
     def close(self) -> None:
         self._timer.stop()
@@ -453,6 +479,10 @@ class ShareServer(QObject):
             self._timer.start()
 
     def _inject(self, stream: MessageStream, message: dict) -> None:
+        if not self._input_allowed:
+            # View-only: the toggle already produced a status line; per-event
+            # noise goes nowhere (not even the debug log — it's every move).
+            return
         action = message.get("action")
         x, y = message.get("x"), message.get("y")
         if stream not in self._controllers:

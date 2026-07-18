@@ -161,7 +161,10 @@ class SharingTab(QWidget):
     statusMessage = Signal(str)
     peerEvent = Signal(dict)  # {key, event, name, address, detail} for the inventory
     sharingChanged = Signal(bool)  # emitted with `serving` after start/stop
+    viewerCountChanged = Signal(int)  # 0 while not serving
     restartRequested = Signal()
+
+    ALLOW_INPUT_KEY = "allow_remote_input"
 
     def __init__(
         self,
@@ -192,6 +195,11 @@ class SharingTab(QWidget):
         self._discoverable = False
 
         self.share_checkbox = QCheckBox("Share this computer's screen on the LAN")
+        self.allow_input_checkbox = QCheckBox("Allow viewers to control this computer")
+        self.allow_input_checkbox.setChecked(
+            self._settings.get(self.ALLOW_INPUT_KEY, "1") != "0"
+        )
+        self.allow_input_checkbox.toggled.connect(self._on_allow_input_toggled)
         self._summary = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.viewers_table = ViewersTable(performance)
         self.restart_button = QPushButton("Restart app")
@@ -203,6 +211,7 @@ class SharingTab(QWidget):
         self.restart_button.clicked.connect(self.restartRequested.emit)
         layout = QVBoxLayout(self)
         layout.addWidget(self.share_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.allow_input_checkbox, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._summary)
         layout.addWidget(self.viewers_table, stretch=1)
         layout.addWidget(self.restart_button, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -223,6 +232,21 @@ class SharingTab(QWidget):
     def serving(self) -> bool:
         """True while sharing is enabled and the server is actually listening."""
         return self.share_server is not None and self._listening
+
+    @property
+    def viewer_count(self) -> int:
+        return self.share_server.client_count if self.share_server is not None else 0
+
+    def _on_allow_input_toggled(self, checked: bool) -> None:
+        self._settings.set(self.ALLOW_INPUT_KEY, "1" if checked else "0")
+        if self.share_server is not None:
+            self.share_server.set_input_allowed(checked)  # emits its status line
+        else:
+            self.statusMessage.emit(
+                "Viewers will be able to control this computer"
+                if checked
+                else "Viewers will be able to watch but not control this computer"
+            )
 
     def _on_share_toggled(self, checked: bool) -> None:
         if checked:
@@ -249,6 +273,7 @@ class SharingTab(QWidget):
             clipboard=self._clipboard,
             performance=self._performance,
             log_provider=lambda: read_log_tail("remotedesktop"),
+            input_allowed=self.allow_input_checkbox.isChecked(),
             parent=self,
         )
         server.status.connect(self.statusMessage)
@@ -304,6 +329,7 @@ class SharingTab(QWidget):
         self._discoverable = False
 
     def _update_summary(self, client_count: int) -> None:
+        self.viewerCountChanged.emit(client_count if self.serving else 0)
         if self.share_server is None:
             self._summary.setText("Not sharing this computer's screen")
             return
