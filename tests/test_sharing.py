@@ -641,3 +641,25 @@ def test_server_reports_phases_in_status(qapp, credentials, tmp_path):
     finally:
         client.close()
         server.close()
+
+
+def test_failed_connect_emits_connection_failed_not_disconnected(qapp, tmp_path):
+    from PySide6.QtNetwork import QHostAddress, QTcpServer
+
+    # A just-freed port refuses connections (nothing listens on it).
+    blocker = QTcpServer()
+    assert blocker.listen(QHostAddress.SpecialAddress.Any, 0)
+    dead_port = blocker.serverPort()
+    blocker.close()
+
+    client = make_client(tmp_path)
+    failures, disconnects = [], []
+    client.connectionFailed.connect(failures.append)
+    client.disconnected.connect(lambda: disconnects.append(True))
+    client.connect_to("127.0.0.1", dead_port)
+    try:
+        pump(qapp, lambda: failures)
+        # Qt never emits `disconnected` for an attempt that did not connect.
+        assert disconnects == []
+    finally:
+        client.close()
