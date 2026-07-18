@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import db, icon, logs, tls, window_state
+from remotedesktop import __version__, db, icon, logs, tls, window_state
 from remotedesktop.autostart import Autostart
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import PairedClients, Settings, default_config_dir, default_db_path
@@ -141,7 +141,7 @@ class ServerWindow(QMainWindow):
         autostart: Autostart | None = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("Remote Desktop Server")
+        self.setWindowTitle(f"Remote Desktop Server {__version__}")
         self.setWindowIcon(icon.app_icon("server"))
         self._name = socket.gethostname()
 
