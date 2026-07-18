@@ -34,6 +34,7 @@ from PySide6.QtNetwork import (
     QTcpSocket,
 )
 
+from remotedesktop import __version__
 from remotedesktop.config import (
     KnownServers,
     PairedClients,
@@ -298,7 +299,7 @@ class ShareServer(QObject):
             info = dict(self._viewer_info.get(stream, {}))
             info.setdefault("name", "")
             info.setdefault("address", _peer(stream.socket))
-            for field in ("user", "host", "os"):
+            for field in ("user", "host", "os", "app_version"):
                 info.setdefault(field, "")
             info["stream"] = stream
             result.append(info)
@@ -351,6 +352,7 @@ class ShareServer(QObject):
             "user": str(message.get("user", "")),
             "host": str(message.get("host", "")),
             "os": str(message.get("os", "")),
+            "app_version": str(message.get("app_version", "")),
         }
         if isinstance(client_id, str) and client_id:
             self._stream_key[stream] = (client_id, client_name, peer)
@@ -375,7 +377,15 @@ class ShareServer(QObject):
             self.status.emit(f'"{client_name}" authenticated with its paired token')
             self._revoked.discard(client_id)
             self._emit_peer(stream, "authenticated")
-            self._admit(stream, client_name, {"type": "welcome", "name": socket_module.gethostname()})
+            self._admit(
+                stream,
+                client_name,
+                {
+                    "type": "welcome",
+                    "name": socket_module.gethostname(),
+                    "app_version": __version__,
+                },
+            )
             return
 
         if existing:
@@ -411,7 +421,12 @@ class ShareServer(QObject):
         self._admit(
             stream,
             client_name,
-            {"type": "welcome", "name": socket_module.gethostname(), "token": token},
+            {
+                "type": "welcome",
+                "name": socket_module.gethostname(),
+                "token": token,
+                "app_version": __version__,
+            },
         )
 
     def _admit(self, stream: MessageStream, client_name: str, welcome: dict) -> None:
@@ -681,6 +696,7 @@ class ShareClient(QObject):
         self._server_key = ""
         self._server_fingerprint = ""
         self._server_token: str | None = None
+        self.server_app_version = ""
         self._frame_count = 0
         self._last_image: QImage | None = None  # delta patches build on this
         self._socket = QSslSocket(self)
@@ -707,6 +723,7 @@ class ShareClient(QObject):
         self._got_first_frame = False
         self._frame_count = 0
         self._last_image = None
+        self.server_app_version = ""
         self._server_key = f"{host}:{port}"
         record = self._known.get(self._server_key) if self._known else None
         self._server_token = record.get("token") if record else None
@@ -762,6 +779,7 @@ class ShareClient(QObject):
             "client_id": self._client_id,
             "name": self._name,
             "delta": True,  # we understand inter-frame delta messages
+            "app_version": __version__,
             **_client_details(),
         }
         if self._server_token:
@@ -794,6 +812,9 @@ class ShareClient(QObject):
         match message.get("type"):
             case "welcome":
                 name = str(message.get("name", ""))
+                # The server's app version, for display next to its name
+                # (empty from pre-0.19 servers).
+                self.server_app_version = str(message.get("app_version", ""))
                 token = message.get("token")
                 if self._known is not None:
                     if isinstance(token, str):

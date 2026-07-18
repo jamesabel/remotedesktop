@@ -20,6 +20,11 @@ dependencies = [
     "pyside6>=6.11.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jamesabel/remotedesktop"
+Repository = "https://github.com/jamesabel/remotedesktop"
+PyPI = "https://pypi.org/project/remotedesktop/"
+
 [project.gui-scripts]
 remotedesktop-client = "remotedesktop.client:main"
 remotedesktop-server = "remotedesktop.server:main"

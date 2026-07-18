@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import __version__, db, icon, logs, window_state
+from remotedesktop.about import AboutTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
@@ -133,6 +134,7 @@ class ClientWindow(QMainWindow):
         log_layout.addWidget(self.connection_log)
         tabs.addTab(log_tab, "Connection log")
         tabs.addTab(PreferencesTab(self._settings, self.performance), "Preferences")
+        tabs.addTab(AboutTab(), "About")
 
         self.discovery_panel.serverActivated.connect(self._on_server_activated)
         self.discovery_panel.serversFound.connect(self._record_discovered)
@@ -230,13 +232,19 @@ class ClientWindow(QMainWindow):
             f"Waiting for the user on {self._server_name} to approve this computer …"
         )
 
+    def _server_label(self) -> str:
+        """The server's name with its app version when it reported one,
+        e.g. 'DEN-PC (0.19.0)'."""
+        version = self._client.server_app_version if self._client is not None else ""
+        return f"{self._server_name} ({version})" if version else self._server_name
+
     def _on_connected(self, server_name: str) -> None:
         self._server_name = server_name or self._server_name
         self._connected = True
         self.inventory.record(self._server_key, "connected", name=self._server_name)
         self.viewer.setFocus()
         self.statusBar().showMessage(
-            f"Connected to {self._server_name} — waiting for first frame "
+            f"Connected to {self._server_label()} — waiting for first frame "
             "(click the view to control it)"
         )
 
@@ -279,7 +287,7 @@ class ClientWindow(QMainWindow):
         self._frame_count += 1
         self.viewer.show_frame(image)
         self.statusBar().showMessage(
-            f"Viewing {self._server_name} — {image.width()}x{image.height()} — "
+            f"Viewing {self._server_label()} — {image.width()}x{image.height()} — "
             f"{self._frame_count} frames received"
         )
 

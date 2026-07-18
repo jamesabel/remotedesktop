@@ -284,6 +284,9 @@ def test_server_viewers_snapshot_carries_hello_details(qapp, credentials, tmp_pa
         viewer = viewers[0]
         assert viewer["name"] and viewer["user"] and viewer["host"]
         assert viewer["os"].startswith("Windows")
+        from remotedesktop import __version__
+
+        assert viewer["app_version"] == __version__
         assert "127.0.0.1" in viewer["address"]
         # The stream key links the snapshot to per-viewer metrics.
         pump(qapp, lambda: server_perf.metrics_for(viewer["stream"])["rtt_ms"] is not None)
