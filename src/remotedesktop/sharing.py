@@ -473,7 +473,9 @@ class ShareServer(QObject):
                     self._injector.button(x, y, name, pressed)
                     buttons, _keys = self._pressed.setdefault(stream, (set(), set()))
                     (buttons.add if pressed else buttons.discard)(name)
-                    self.status.emit(f"Injected {name} button {'down' if pressed else 'up'}")
+                    # Per-event lines are too noisy for the Connection log
+                    # pane; the debug log file still gets them.
+                    _log.debug("Injected %s button %s", name, "down" if pressed else "up")
                 case "wheel":
                     self._injector.wheel(_coord(x), _coord(y), int(message.get("dy", 0)))
                 case "key":
@@ -482,7 +484,7 @@ class ShareServer(QObject):
                     self._injector.key(vk, pressed)
                     _buttons, keys = self._pressed.setdefault(stream, (set(), set()))
                     (keys.add if pressed else keys.discard)(vk)
-                    self.status.emit(f"Injected key vk={vk} {'down' if pressed else 'up'}")
+                    _log.debug("Injected key vk=%d %s", vk, "down" if pressed else "up")
         except (TypeError, ValueError) as error:
             self.status.emit(f"Ignoring malformed input message: {error}")
 
