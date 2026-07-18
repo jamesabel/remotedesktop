@@ -10,6 +10,7 @@ control) is chosen in Preferences. While sharing is enabled, closing the
 window hides to the system tray and sharing continues; quitting is in the
 tray menu. Only one instance runs per user session (`single_instance`)."""
 
+import json
 import logging
 import sqlite3
 import sys
@@ -255,8 +256,10 @@ class MainWindow(QMainWindow):
         window_state.restore_state(self, self._settings, window_state.MAIN_STATE_KEY)
         self.log("Remote Desktop started")
         # Now that the log pane, tray state, and signal wiring exist, start
-        # sharing if the persisted opt-in is on.
+        # sharing if the persisted opt-in is on, and reopen the connections
+        # that were open when the app last ran.
         self.sharing_tab.restore_sharing()
+        self._restore_sessions()
 
     # ------------------------------------------------------------- logging
 
@@ -646,6 +649,37 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------- viewing role
 
+    def _persist_sessions(self) -> None:
+        """Remember the open session tabs so a restart can reopen them."""
+        entries = [
+            {"host": s.host, "port": s.port, "name": s.name}
+            for s in self._sessions
+            if s.port
+        ]
+        self._settings.set("open_sessions", json.dumps(entries))
+
+    def _restore_sessions(self) -> None:
+        raw = self._settings.get("open_sessions")
+        if not raw:
+            return
+        try:
+            entries = json.loads(raw)
+        except ValueError:
+            return
+        for entry in entries if isinstance(entries, list) else []:
+            host, port = entry.get("host"), entry.get("port")
+            if not isinstance(host, str) or not isinstance(port, int):
+                continue
+            key = f"{host}:{port}"
+            if self._session_for_key(key) is not None:
+                continue
+            session = self._create_session(key, str(entry.get("name") or key))
+            self.log(f"Restoring connection to {session.name} ({key})")
+            self._connect_session(session, host, port)
+            # A restored connection keeps trying if the server isn't up yet:
+            # arm the backoff loop that normally arms only on success.
+            session.auto_reconnect = True
+
     def _session_for_key(self, key: str) -> ServerSession | None:
         for session in self._sessions:
             if session.key == key:
@@ -783,6 +817,7 @@ class MainWindow(QMainWindow):
         self._set_session_status(
             session, f"Connecting to {session.name} ({session.key}) …"
         )
+        self._persist_sessions()
         session.client.connect_to(host, port)
 
     def _close_session(self, session: ServerSession) -> None:
@@ -794,6 +829,7 @@ class MainWindow(QMainWindow):
         was_current = self._tabs.currentWidget() is session.page
         self._sessions.pop(index)
         self._tabs.removeTab(index)
+        self._persist_sessions()  # a closed tab is not reopened on restart
         self._ensure_placeholder()
         if was_current and not self._sessions:
             self._tabs.setCurrentIndex(0)  # back to the instructions tab
@@ -859,6 +895,7 @@ class MainWindow(QMainWindow):
             box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             box.show()  # non-modal: streaming continues behind it
         self.client_inventory.record(session.key, "connected", name=session.name)
+        self._persist_sessions()  # the welcome may have renamed the session
         session.viewer.setFocus()
         self._set_session_status(
             session,

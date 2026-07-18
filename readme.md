@@ -47,7 +47,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 ## Features
 
 - 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is a three-state choice in Preferences (*Not shared* / *view only* / *full control*), and only one instance runs per computer (launching it again just raises the existing window).
-- 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN, no addresses to type, and the list refreshes itself in the background.
+- 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN at startup, no addresses to type (press *Refresh* or F5 to rescan).
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared — viewers can watch only* and sharing becomes view-only, switchable live.
@@ -55,7 +55,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
-- 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed.
+- 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Connections that were open when the app closed are restored on the next start.
 - 🚀 **Hands-off operation** — optional start-at-login (per-user, no admin rights), close-to-tray while sharing (the screen stays available with the window closed), and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
 - 🗃️ **Persistent peer inventory** — a SQLite-backed history of every peer seen on the LAN, with one-click *Revoke* / *Forget*.
 - 🧭 **Desktop-app niceties** — a real menu bar with standard shortcuts, a status-bar sharing indicator, a confirmation before quitting with viewers connected, and window/panel layout that persists across restarts.

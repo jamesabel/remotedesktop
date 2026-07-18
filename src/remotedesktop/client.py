@@ -53,14 +53,14 @@ class _ServerList(QListWidget):
 class DiscoveryPanel(QWidget):
     """Scans the LAN for servers and lists them for the user to pick.
 
-    With `auto_scan` the panel scans once at startup and rescans on a timer
-    (skipped while a scan is in flight or the panel is not visible), so the
-    list stays current without manual refreshes. Tests construct the panel
+    Scanning happens exactly twice as often as the user asks for it: once at
+    startup (with `auto_scan`) and whenever they click Refresh (or press F5)
+    — deliberately no periodic background rescans. Tests construct the panel
     with the default `auto_scan=False`, which never broadcasts on the LAN.
 
     `is_self` (optional) marks entries that are this very instance's own
     server — sharing and scanning in one app means you discover yourself —
-    with a "(this computer)" label. Labeled, never hidden.
+    with a "(this computer)" label. Labeled, never hidden, not connectable.
     """
 
     serverActivated = Signal(ServerInfo)
@@ -74,7 +74,6 @@ class DiscoveryPanel(QWidget):
         *,
         is_self: Callable[[ServerInfo], bool] | None = None,
         auto_scan: bool = False,
-        rescan_interval_ms: int = 15000,
     ) -> None:
         super().__init__(parent)
         self._is_self = is_self
@@ -96,14 +95,9 @@ class DiscoveryPanel(QWidget):
         self.server_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.server_list.customContextMenuRequested.connect(self._on_context_menu)
         self._scanFinished.connect(self._show_results)
-        self._rescan_timer: QTimer | None = None
         if auto_scan:
             # Deferred so the host window can wire status/serversFound first.
             QTimer.singleShot(0, self.refresh)
-            self._rescan_timer = QTimer(self)
-            self._rescan_timer.setInterval(rescan_interval_ms)
-            self._rescan_timer.timeout.connect(self._auto_refresh)
-            self._rescan_timer.start()
 
     def refresh(self) -> None:
         if self._scanning:
@@ -113,13 +107,6 @@ class DiscoveryPanel(QWidget):
         self._refresh_button.setText("Scanning…")
         self.status.emit(f"Scanning LAN (UDP broadcast to port {DISCOVERY_PORT}) …")
         threading.Thread(target=self._scan, name="discovery-scan", daemon=True).start()
-
-    def _auto_refresh(self) -> None:
-        # No point broadcasting while nobody can see the results (panel
-        # closed, or the window is hidden in the tray).
-        if self._scanning or not self.isVisible():
-            return
-        self.refresh()
 
     def _scan(self) -> None:
         # Runs on a worker thread; the signal is delivered queued on the GUI
