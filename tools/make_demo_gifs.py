@@ -262,7 +262,7 @@ def main() -> None:
             (2.0, lambda: client_window.discovery_panel.serverActivated.emit(info)),
             (21.2, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Performance"))),
             (21.6, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Performance"))),
-            (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "Remote Screen"))),
+            (23.6, lambda: client_tabs.setCurrentIndex(tab_index(client_tabs, "DEN-PC"))),
             (24.0, lambda: server_tabs.setCurrentIndex(tab_index(server_tabs, "Status"))),
         ]
         client_frames: list[Image.Image] = []
