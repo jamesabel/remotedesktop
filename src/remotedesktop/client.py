@@ -131,7 +131,7 @@ class ClientWindow(QMainWindow):
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.currentChanged.connect(lambda _index: self._refresh_status_bar())
         self._tabs.addTab(
-            InventoryTab(self.inventory, "Forget server", self._forget_server),
+            InventoryTab(self.inventory, "Forget", self._forget_server),
             "Servers on LAN",
         )
         self._tabs.addTab(

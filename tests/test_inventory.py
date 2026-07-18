@@ -86,19 +86,41 @@ def test_inventory_tab_stretches_a_spacer_not_the_last_data_column(qapp):
     assert tab._table.horizontalHeader().stretchLastSection()
 
 
-def test_inventory_tab_action_button_passes_selected_key(qapp):
+def test_inventory_tab_rows_have_their_own_action_button(qapp):
     inv = ConnectionInventory()
     inv.record("client-42", "connected", name="Bob")
+    inv.record("client-43", "connected", name="Carol")
     acted = []
     tab = InventoryTab(inv, "Revoke", acted.append)
-    button = tab._action_button
-    assert button is not None
-    # No selection yet -> button disabled and does nothing useful.
-    assert not button.isEnabled()
-    tab._table.selectRow(0)
-    assert button.isEnabled()
-    button.click()
-    assert acted == ["client-42"]
+    from PySide6.QtCore import Qt
+
+    # Each row's button acts on that row's peer, whatever the sort order
+    # (last_seen has second resolution, so same-second rows tie).
+    row_keys = [
+        tab._table.item(row, 0).data(Qt.ItemDataRole.UserRole) for row in range(2)
+    ]
+    assert sorted(row_keys) == ["client-42", "client-43"]
+    first, second = tab._row_button(0), tab._row_button(1)
+    assert first is not None and second is not None
+    assert first.text() == "Revoke"
+    first.click()
+    second.click()
+    assert acted == row_keys
+    # A refresh (inventory change) rebuilds the buttons with the right keys.
+    acted.clear()
+    inv.record("client-43", "disconnected", name="Carol")
+    for row in range(2):
+        button = tab._row_button(row)
+        assert button is not None
+        button.click()
+    assert sorted(acted) == ["client-42", "client-43"]
+
+
+def test_inventory_tab_without_action_has_no_row_buttons(qapp):
+    inv = ConnectionInventory()
+    inv.record("client-42", "connected", name="Bob")
+    tab = InventoryTab(inv)
+    assert tab._row_button(0) is None
 
 
 def test_server_populates_inventory_via_peer_events(qapp, credentials, tmp_path):
