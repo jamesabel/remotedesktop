@@ -425,7 +425,10 @@ class MainWindow(QMainWindow):
         if session is not None:
             self._close_session(session)
         self._known_servers.forget(key)
-        self.client_inventory.record(key, "forgotten")
+        # Forgetting removes the server entirely — from the table and the DB —
+        # rather than leaving a "forgotten" row behind. A rescan that still
+        # finds it on the LAN records it afresh as "discovered".
+        self.client_inventory.remove(key)
         self.log(f"Forgot server {key}")
 
     def _record_discovered(self, servers: list) -> None:

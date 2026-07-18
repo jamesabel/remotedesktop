@@ -38,7 +38,6 @@ _EVENT_STATE = {
     "refused": "refused",
     "disconnected": "disconnected",
     "revoked": "revoked",
-    "forgotten": "forgotten",
     "error": "error",
 }
 
@@ -133,6 +132,18 @@ class ConnectionInventory(QObject):
         record.state = _EVENT_STATE.get(event, event)
         record.last_event = event
         self._save(record)
+        self.changed.emit()
+
+    def remove(self, key: str) -> None:
+        """Delete a peer outright — from the table and from the database
+        (a forgotten server leaves no trace, unlike a revoked client)."""
+        if self._peers.pop(key, None) is None:
+            return
+        try:
+            self._db.execute(f"DELETE FROM {self._table} WHERE key = ?", (key,))
+            self._db.commit()
+        except sqlite3.Error:
+            pass  # persistence failure must never break connectivity
         self.changed.emit()
 
     def peers(self) -> list[PeerRecord]:
