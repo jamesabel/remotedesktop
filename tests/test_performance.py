@@ -54,6 +54,44 @@ def test_metric_series_trims_to_window():
     assert series.samples() == []
 
 
+def test_sample_statistics_summarize_the_window():
+    from remotedesktop.performance import sample_statistics
+
+    assert sample_statistics([]) is None
+    single = sample_statistics([5.0])
+    assert single == {
+        "count": 1, "mean": 5.0, "min": 5.0, "max": 5.0, "p99": 5.0, "jitter": 0.0,
+    }
+    stats = sample_statistics([2.0, 4.0, 2.0, 12.0])
+    assert stats is not None
+    assert stats["count"] == 4
+    assert stats["mean"] == 5.0
+    assert stats["min"] == 2.0 and stats["max"] == 12.0
+    assert stats["p99"] == 12.0  # nearest-rank on a small sample = max
+    # Jitter: mean |consecutive delta| = (2 + 2 + 10) / 3
+    assert stats["jitter"] == pytest.approx(14.0 / 3.0)
+    # A steady series has zero jitter no matter its level.
+    steady = sample_statistics([100.0] * 50)
+    assert steady is not None and steady["jitter"] == 0.0
+    # p99 excludes a single outlier once there are >= 100 samples.
+    many = sample_statistics([10.0] * 99 + [500.0])
+    assert many is not None and many["p99"] == 10.0
+
+
+def test_metric_series_statistics_follow_the_window():
+    clock = FakeClock()
+    series = MetricSeries(10.0, clock=clock)
+    assert series.statistics() is None
+    series.add(100.0)  # will age out of the window
+    clock.advance(8.0)
+    for value in (2.0, 4.0):
+        series.add(value)
+    clock.advance(3.0)  # first sample is now 11 s old
+    stats = series.statistics()
+    assert stats is not None
+    assert stats["count"] == 2 and stats["max"] == 4.0  # 100.0 aged out
+
+
 def test_monitor_samples_aggregate_bandwidth(qapp):
     clock = FakeClock()
     monitor = PerformanceMonitor(window_seconds=60, clock=clock)
