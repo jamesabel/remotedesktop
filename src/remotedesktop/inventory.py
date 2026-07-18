@@ -37,7 +37,6 @@ _EVENT_STATE = {
     "denied": "denied",
     "refused": "refused",
     "disconnected": "disconnected",
-    "revoked": "revoked",
     "error": "error",
 }
 
@@ -136,7 +135,7 @@ class ConnectionInventory(QObject):
 
     def remove(self, key: str) -> None:
         """Delete a peer outright — from the table and from the database
-        (a forgotten server leaves no trace, unlike a revoked client)."""
+        (forgotten servers and revoked clients leave no trace)."""
         if self._peers.pop(key, None) is None:
             return
         try:
