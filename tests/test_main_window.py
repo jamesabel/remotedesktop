@@ -809,36 +809,6 @@ def test_closing_the_tab_stops_auto_reconnect(qapp, credentials, tmp_path):
         server.close()
 
 
-def test_discovery_panel_auto_rescans_while_visible(qapp, monkeypatch):
-    scans = []
-    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
-    panel = DiscoveryPanel(auto_scan=True, rescan_interval_ms=30)
-    panel.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-    panel.show()
-    try:
-        pump(qapp, lambda: len(scans) >= 3)  # initial + timer rescans
-    finally:
-        panel.close()
-
-
-def test_discovery_panel_skips_rescans_while_hidden_or_scanning(qapp, monkeypatch):
-    scans = []
-    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
-    panel = DiscoveryPanel(auto_scan=True, rescan_interval_ms=30)
-    try:
-        # Never shown: only the initial startup scan runs.
-        pump(qapp, lambda: len(scans) == 1)
-        pump(qapp, lambda: True, timeout=0.3)
-        assert len(scans) == 1
-        # And an in-flight scan suppresses another one.
-        panel._scanning = True
-        panel._auto_refresh()
-        assert len(scans) == 1
-        panel._scanning = False
-    finally:
-        panel.close()
-
-
 def test_discovery_panel_connect_button_and_selection_preservation(qapp):
     panel = DiscoveryPanel()
     activated = []
@@ -1010,3 +980,92 @@ def test_own_server_cannot_be_connected(qapp, credentials, tmp_path):
         assert panel.connect_button.isEnabled()
     finally:
         window.close()
+
+def test_discovery_panel_scans_only_at_startup(qapp, monkeypatch):
+    import time
+
+    scans = []
+    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    panel = DiscoveryPanel(auto_scan=True)
+    panel.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    panel.show()
+    try:
+        pump(qapp, lambda: len(scans) == 1)  # the single startup scan
+        deadline = time.monotonic() + 0.4
+        while time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert len(scans) == 1  # no periodic background rescans
+        panel.refresh()  # only a manual refresh scans again
+        pump(qapp, lambda: len(scans) == 2)
+    finally:
+        panel.close()
+
+
+def test_open_sessions_are_restored_on_restart(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+    pump(qapp, lambda: window._sessions[0].connected)
+    window.close()
+
+    # Same DB = same machine restarting: the connection comes back on its
+    # own (the stored token makes it promptless).
+    reopened = make_window(tmp_path)
+    try:
+        assert len(reopened._sessions) == 1
+        restored = reopened._sessions[0]
+        assert restored.key == f"127.0.0.1:{server.port}"
+        pump(qapp, lambda: restored.connected)
+        pump(qapp, lambda: restored.viewer.has_frame)
+    finally:
+        reopened.close()
+        server.close()
+
+
+def test_restored_session_keeps_trying_until_the_server_returns(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    port = server.port
+    window = make_window(tmp_path)
+    window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=port))
+    pump(qapp, lambda: window._sessions[0].connected)
+    window.close()
+    server.close()  # the server is gone when the app "restarts"
+
+    reopened = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        restored = reopened._sessions[0]
+        pump(qapp, lambda: restored.reconnect_attempts >= 1)  # backoff armed
+        assert not restored.connected
+
+        revived = ShareServer(
+            approve_client=lambda *_: True,
+            credentials=credentials,
+            paired=PairedClients(db.connect(tmp_path / "server.db")),
+        )
+        assert revived.listen(port)
+        try:
+            pump(qapp, lambda: restored.connected, timeout=15.0)
+        finally:
+            revived.close()
+    finally:
+        reopened.close()
+
+
+def test_closed_tabs_are_not_restored(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window._sessions[0].connected)
+        window._on_tab_close_requested(0)  # the user closed it on purpose
+        assert window._sessions == []
+    finally:
+        window.close()
+
+    reopened = make_window(tmp_path)
+    try:
+        assert reopened._sessions == []
+    finally:
+        reopened.close()
+        server.close()
