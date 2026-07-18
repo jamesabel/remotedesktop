@@ -354,6 +354,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------- serving role
 
     def _record_server_peer(self, event: dict) -> None:
+        if event["event"] == "revoked":
+            # Symmetric with forgetting a server: a revoked client's row is
+            # deleted from the table and the DB rather than lingering. A new
+            # connection attempt from it records the peer afresh.
+            self.server_inventory.remove(event["key"])
+            return
         self.server_inventory.record(
             event["key"],
             event["event"],

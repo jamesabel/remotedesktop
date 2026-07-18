@@ -46,11 +46,17 @@ def make_tab(credentials, tmp_path, *, discovery_port=None, connect_port=0, enab
     tab.messages = []
     tab.statusMessage.connect(tab.messages.append)
     tab.inventory = ConnectionInventory()
-    tab.peerEvent.connect(
-        lambda e: tab.inventory.record(
-            e["key"], e["event"], name=e.get("name", ""), address=e.get("address", "")
-        )
-    )
+
+    def apply_peer_event(e):
+        # Mirrors MainWindow._record_server_peer: "revoked" deletes the row.
+        if e["event"] == "revoked":
+            tab.inventory.remove(e["key"])
+        else:
+            tab.inventory.record(
+                e["key"], e["event"], name=e.get("name", ""), address=e.get("address", "")
+            )
+
+    tab.peerEvent.connect(apply_peer_event)
     tab.restore_sharing()
     return tab
 
@@ -254,7 +260,8 @@ def test_revoke_disconnects_a_connected_client(qapp, credentials, tmp_path, monk
         pump(qapp, lambda: names)
         tab.revoke_client(CLIENT_ID)
         pump(qapp, lambda: disconnected)
-        assert tab.inventory._peers[CLIENT_ID].state == "revoked"
+        # Symmetric with forgetting a server: the revoked row is deleted.
+        pump(qapp, lambda: CLIENT_ID not in tab.inventory._peers)
     finally:
         client.close()
         tab.shutdown()
@@ -275,7 +282,7 @@ def test_revoke_works_while_not_sharing(qapp, credentials, tmp_path, monkeypatch
 
         tab.revoke_client(CLIENT_ID)
         assert tab._paired.token_for(CLIENT_ID) is None
-        assert tab.inventory._peers[CLIENT_ID].state == "revoked"
+        assert CLIENT_ID not in tab.inventory._peers  # row deleted outright
         assert any("Revoked access" in m for m in tab.messages)
     finally:
         client.close()
