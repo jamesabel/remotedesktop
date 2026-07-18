@@ -107,6 +107,10 @@ class PerformanceMonitor(QObject):
     updated = Signal()  # one emit per sample tick
     connectionLost = Signal(object)  # the active stream whose responsive peer went silent
 
+    # Graphs aggregate bandwidth across streams and plot the *active* (most
+    # recently attached) stream's RTT as a single coherent line; per-stream
+    # numbers for all attached streams are available via metrics_for().
+
     def __init__(
         self,
         *,
@@ -126,6 +130,12 @@ class PerformanceMonitor(QObject):
         self.peer_rtt_ms = MetricSeries(window_seconds, clock=clock)
         self._streams: list[StreamLike] = []
         self._baselines: dict[StreamLike, tuple[int, int]] = {}
+        # Latest per-stream numbers (for the server's viewers table); the
+        # rolling series above stay aggregate/active-stream only.
+        self._stream_send_bps: dict[StreamLike, float] = {}
+        self._stream_recv_bps: dict[StreamLike, float] = {}
+        self._stream_rtt: dict[StreamLike, float] = {}
+        self._stream_peer_rtt: dict[StreamLike, float] = {}
         self._active: StreamLike | None = None
         # Dead-connection detection, all scoped to the active stream: when its
         # bytes_received counter last grew, whether its peer ever answered a
@@ -133,7 +143,7 @@ class PerformanceMonitor(QObject):
         self._last_data: float | None = None
         self._peer_responsive = False
         self._lost_reported = False
-        self._pending: dict[int, float] = {}
+        self._pending: dict[int, tuple[StreamLike, float]] = {}
         self._ids = itertools.count(1)
         self._last_tick: float | None = None
         self._tick_count = 0
@@ -168,12 +178,31 @@ class PerformanceMonitor(QObject):
             return
         self._streams.remove(stream)
         del self._baselines[stream]
+        for per_stream in (
+            self._stream_send_bps,
+            self._stream_recv_bps,
+            self._stream_rtt,
+            self._stream_peer_rtt,
+        ):
+            per_stream.pop(stream, None)
+        for ping_id in [i for i, (s, _t) in self._pending.items() if s is stream]:
+            del self._pending[ping_id]
         if self._active is stream:
             self._activate(self._streams[-1] if self._streams else None)
         if not self._streams:
             self._timer.stop()
             self._pending.clear()
             self._last_tick = None
+
+    def metrics_for(self, stream: StreamLike) -> dict:
+        """Latest numbers for one attached stream (None where not yet
+        measured): {"send_bps", "recv_bps", "rtt_ms", "peer_rtt_ms"}."""
+        return {
+            "send_bps": self._stream_send_bps.get(stream),
+            "recv_bps": self._stream_recv_bps.get(stream),
+            "rtt_ms": self._stream_rtt.get(stream),
+            "peer_rtt_ms": self._stream_peer_rtt.get(stream),
+        }
 
     def _activate(self, stream: StreamLike | None) -> None:
         self._active = stream
@@ -193,6 +222,8 @@ class PerformanceMonitor(QObject):
             case "ping":
                 stream.send_json({"type": "pong", "id": message.get("id")})
                 rtt = message.get("rtt")
+                if isinstance(rtt, (int, float)):
+                    self._stream_peer_rtt[stream] = float(rtt)
                 if stream is self._active:
                     # A peer that pings us runs this feature too — that arms
                     # the silence detector just as well as a pong does.
@@ -204,35 +235,51 @@ class PerformanceMonitor(QObject):
                     self._peer_responsive = True
                 ping_id = message.get("id")
                 if isinstance(ping_id, int):
-                    sent = self._pending.pop(ping_id, None)
-                    if sent is not None:
-                        self.rtt_ms.add((self._clock() - sent) * 1000.0)
+                    pending = self._pending.pop(ping_id, None)
+                    # Only honor a pong arriving on the stream it was sent to.
+                    if pending is not None and pending[0] is stream:
+                        rtt_ms = (self._clock() - pending[1]) * 1000.0
+                        self._stream_rtt[stream] = rtt_ms
+                        if stream is self._active:
+                            self.rtt_ms.add(rtt_ms)
 
     def _on_tick(self) -> None:
         now = self._clock()
+        elapsed = now - self._last_tick if self._last_tick is not None else None
         delta_sent = delta_received = 0
         for stream in self._streams:
             base_sent, base_received = self._baselines[stream]
-            delta_sent += stream.bytes_sent - base_sent
-            delta_received += stream.bytes_received - base_received
+            sent = stream.bytes_sent - base_sent
+            received = stream.bytes_received - base_received
+            delta_sent += sent
+            delta_received += received
+            if elapsed is not None and elapsed > 0:
+                self._stream_send_bps[stream] = sent / elapsed
+                self._stream_recv_bps[stream] = received / elapsed
             if stream is self._active and stream.bytes_received > base_received:
                 self._last_data = now
             self._baselines[stream] = (stream.bytes_sent, stream.bytes_received)
-        if self._last_tick is not None and (elapsed := now - self._last_tick) > 0:
+        if elapsed is not None and elapsed > 0:
             self.send_bps.add(delta_sent / elapsed)
             self.recv_bps.add(delta_received / elapsed)
         self._last_tick = now
 
-        if self._active is not None:
-            for ping_id in [i for i, t in self._pending.items() if now - t > _PING_PRUNE_SECONDS]:
-                del self._pending[ping_id]
+        for ping_id in [
+            i for i, (_s, t) in self._pending.items() if now - t > _PING_PRUNE_SECONDS
+        ]:
+            del self._pending[ping_id]
+        # Every stream gets its own ping so the viewers table can show
+        # per-viewer RTT; each ping carries our latest measurement for that
+        # same link, so both ends see both directions.
+        for stream in self._streams:
             ping_id = next(self._ids)
-            self._pending[ping_id] = now
+            self._pending[ping_id] = (stream, now)
             ping: dict = {"type": "ping", "id": ping_id}
-            if (rtt := self.rtt_ms.latest()) is not None:
+            if (rtt := self._stream_rtt.get(stream)) is not None:
                 ping["rtt"] = rtt
-            self._active.send_json(ping)
+            stream.send_json(ping)
 
+        if self._active is not None:
             if (
                 self._peer_responsive
                 and not self._lost_reported

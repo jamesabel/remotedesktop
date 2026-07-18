@@ -201,6 +201,35 @@ def test_approval_prompt_pairs_client_and_updates_summary(qapp, credentials, tmp
         window.close()
 
 
+def test_viewers_table_lists_connected_client_details(qapp, credentials, tmp_path, monkeypatch):
+    stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.Yes)
+    window = make_window(credentials, tmp_path)
+    client = make_client(tmp_path)
+    names = []
+    client.connected.connect(names.append)
+    assert window.viewers_table.rowCount() == 0
+    client.connect_to("127.0.0.1", window.share_server.port)
+    try:
+        pump(qapp, lambda: names)
+        pump(qapp, lambda: window.viewers_table.rowCount() == 1)
+        row = [
+            window.viewers_table.item(0, column).text()
+            for column in range(len(window.viewers_table._COLUMNS))
+        ]
+        name, address, user, host, os_info, send, recv, rtt = row
+        # The hello carried this machine's real login/host/OS details.
+        assert name and user != "—" and host != "—"
+        assert "127.0.0.1" in address and "::ffff:" not in address
+        assert os_info.startswith("Windows")
+        # No monitor tick has necessarily run yet; metrics are dashes or values.
+        assert send and recv and rtt
+        client.close()
+        pump(qapp, lambda: window.viewers_table.rowCount() == 0)
+    finally:
+        client.close()
+        window.close()
+
+
 def test_refused_approval_denies_client(qapp, credentials, tmp_path, monkeypatch):
     stub_approval_prompt(monkeypatch, QMessageBox.StandardButton.No)
     window = make_window(credentials, tmp_path)
