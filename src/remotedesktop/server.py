@@ -66,15 +66,17 @@ class ViewersTable(QTableWidget):
     while visible (background tabs schedule no work).
     """
 
+    # No "Computer" column: the display name defaults to (and, with no UI
+    # to change it, always is) the hostname the hello also reports.
     _COLUMNS = [
-        "Name", "Address", "User", "Computer", "OS", "Version", "Send", "Receive",
+        "Name", "Address", "User", "OS", "Version", "Send", "Receive",
         "RTT", "RTT mean", "RTT min", "RTT max", "RTT p99", "RTT jitter",
     ]
     # Metric cells change text every tick, so their columns get a constant
     # width (sized to the widest plausible value) instead of
     # ResizeToContents — otherwise the columns visibly jitter each second.
-    _RATE_COLUMNS = (6, 7)  # Send / Receive
-    _MS_COLUMNS = (8, 9, 10, 11, 12, 13)  # RTT latest + window statistics
+    _RATE_COLUMNS = (5, 6)  # Send / Receive
+    _MS_COLUMNS = (7, 8, 9, 10, 11, 12)  # RTT latest + window statistics
     _METRIC_COLUMNS = _RATE_COLUMNS + _MS_COLUMNS
 
     def __init__(self, performance: PerformanceMonitor, parent=None) -> None:
@@ -139,7 +141,6 @@ class ViewersTable(QTableWidget):
                 viewer["name"] or "(unknown)",
                 viewer["address"],
                 viewer["user"] or "—",
-                viewer["host"] or "—",
                 viewer["os"] or "—",
                 self._version_cell(viewer["app_version"]),
                 format_rate(send) if send is not None else "—",
