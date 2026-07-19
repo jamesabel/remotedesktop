@@ -101,21 +101,21 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         # and the connection log.
         from PySide6.QtWidgets import QGroupBox
 
-        # Left column: this computer (sharing, log); right: the LAN tables.
+        # One outer box per role (client left, server right), log below.
         connections_tab = tabs.widget(labels.index("Connections"))
         groups = [g.title() for g in connections_tab.findChildren(QGroupBox)]
         assert groups == [
-            "Server (sharing this computer)",
-            "Client history",
-            "Client (connected servers)",
+            "Client (viewer)",
+            "Connected servers",
             "Server history",
+            "Server (sharing)",
+            "Client history",
             "Connection log",
         ]
-        # Role-driven: sharing is off, so the server-side pair is hidden and
-        # the client-side pair (plus the log) shows.
-        assert window._sharing_group.isHidden() and window._clients_group.isHidden()
-        assert not window._sessions_group.isHidden()
-        assert not window._servers_group.isHidden()
+        # Role-driven: sharing is off, so the server box is hidden and the
+        # client box (plus the log) shows, starting at the left edge.
+        assert window._server_role_group.isHidden()
+        assert not window._client_role_group.isHidden()
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
         # Idle: neither role schedules periodic work.
@@ -1090,7 +1090,7 @@ def test_server_only_instance_hides_client_ui(qapp, credentials, tmp_path):
         assert "Server" not in labels  # no viewer role, no Server tab
         assert labels[0] == "Connections"
         assert window.discovery_panel.isHidden()
-        assert window._servers_group.isHidden()
+        assert window._client_role_group.isHidden()
         assert not window.refresh_action.isEnabled()
         assert not window.preferences_tab.viewer_checkbox.isChecked()
         # The role indicators say what this instance is.
@@ -1113,7 +1113,7 @@ def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
         assert window._sessions == []  # open connections were closed
         assert "Server" not in [tabs.tabText(i) for i in range(tabs.count())]
         assert window.discovery_panel.isHidden()
-        assert window._servers_group.isHidden()
+        assert window._client_role_group.isHidden()
         assert "Client (viewer): off" in window.client_role_button.text()
         # With the role off, activation attempts are refused.
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
@@ -1122,7 +1122,7 @@ def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
         window.preferences_tab.viewer_checkbox.setChecked(True)
         assert tabs.tabText(0) == "Server"  # the placeholder is back
         assert not window.discovery_panel.isHidden()
-        assert not window._servers_group.isHidden()
+        assert not window._client_role_group.isHidden()
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
         pump(qapp, lambda: window._sessions and window._sessions[0].connected)
     finally:
@@ -1263,19 +1263,17 @@ def test_connections_groups_follow_both_roles(qapp, credentials, tmp_path):
     window = make_window(tmp_path, credentials)
     try:
         # Viewer on, sharing off.
-        assert window._sharing_group.isHidden() and window._clients_group.isHidden()
-        assert not window._sessions_group.isHidden()
+        assert window._server_role_group.isHidden()
+        assert not window._client_role_group.isHidden()
 
         window.sharing_tab.set_mode("control")
-        assert not window._sharing_group.isHidden()
-        assert not window._clients_group.isHidden()
+        assert not window._server_role_group.isHidden()
 
         window.preferences_tab.viewer_checkbox.setChecked(False)
-        assert window._sessions_group.isHidden()
-        assert window._servers_group.isHidden()
-        assert not window._sharing_group.isHidden()  # server side remains
+        assert window._client_role_group.isHidden()
+        assert not window._server_role_group.isHidden()  # server box remains
 
         window.sharing_tab.set_mode("off")
-        assert window._sharing_group.isHidden()  # nothing left but the log
+        assert window._server_role_group.isHidden()  # nothing left but the log
     finally:
         window.close()

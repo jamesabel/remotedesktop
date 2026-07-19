@@ -207,28 +207,38 @@ class MainWindow(QMainWindow):
         self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
 
         connections_tab = QWidget()
-        # Server-role pair: live sharing status/viewers plus the persisted
-        # client pairings. Client-role pair: live connected-server sessions
-        # (with the same network statistics as the viewers table) plus the
-        # persisted server records. Each pair shows only while its role can
-        # put something in it (_update_connections_groups).
-        self._sharing_group = QGroupBox("Server (sharing this computer)")
-        QVBoxLayout(self._sharing_group).addWidget(self.sharing_tab)
-        self._clients_group = QGroupBox("Client history")
-        QVBoxLayout(self._clients_group).addWidget(
-            InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
-        )
+        # One outer group box per role, side by side as WIDGETS (not column
+        # layouts): a hidden widget frees its space, so when a role is off
+        # the other box starts at the left edge instead of leaving a gap.
+        # Client box: live connected-server sessions (with the same network
+        # statistics as the viewers table) over the persisted server
+        # records. Server box: live sharing status/viewers over the
+        # persisted client pairings.
+        self._client_role_group = QGroupBox("Client (viewer)")
+        client_role_layout = QVBoxLayout(self._client_role_group)
         self._sessions_source = _ConnectedServersSource(self)
         self.sessions_table = _SessionsTable(self.client_performance)
         self.sessions_table.set_share_server(self._sessions_source)
-        self._sessions_group = QGroupBox("Client (connected servers)")
-        QVBoxLayout(self._sessions_group).addWidget(self.sessions_table)
+        sessions_box = QGroupBox("Connected servers")
+        QVBoxLayout(sessions_box).addWidget(self.sessions_table)
         # "History" (not "on LAN") — the live discovery list is the left
         # panel; these tables are the persisted first/last-seen records.
-        self._servers_group = QGroupBox("Server history")
-        QVBoxLayout(self._servers_group).addWidget(
+        servers_history_box = QGroupBox("Server history")
+        QVBoxLayout(servers_history_box).addWidget(
             InventoryTab(self.client_inventory, "Forget", self._forget_server)
         )
+        client_role_layout.addWidget(sessions_box)
+        client_role_layout.addWidget(servers_history_box)
+
+        self._server_role_group = QGroupBox("Server (sharing)")
+        server_role_layout = QVBoxLayout(self._server_role_group)
+        server_role_layout.addWidget(self.sharing_tab)
+        clients_history_box = QGroupBox("Client history")
+        QVBoxLayout(clients_history_box).addWidget(
+            InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
+        )
+        server_role_layout.addWidget(clients_history_box)
+
         log_group = QGroupBox("Connection log")
         log_layout = QVBoxLayout(log_group)
         log_buttons = QHBoxLayout()
@@ -237,18 +247,11 @@ class MainWindow(QMainWindow):
         log_buttons.addStretch(1)
         log_layout.addLayout(log_buttons)
         log_layout.addWidget(self.connection_log)
-        # Left column: the server role. Right column: the client role.
-        # The log spans the bottom. Column-level vboxes so a hidden group
-        # lets its neighbor take the full column.
-        left_column = QVBoxLayout()
-        left_column.addWidget(self._sharing_group)
-        left_column.addWidget(self._clients_group)
-        right_column = QVBoxLayout()
-        right_column.addWidget(self._sessions_group)
-        right_column.addWidget(self._servers_group)
+        # Client box left, Server box right (the order the indicators and
+        # Preferences use); the log spans the bottom.
         columns = QHBoxLayout()
-        columns.addLayout(left_column, 1)
-        columns.addLayout(right_column, 1)
+        columns.addWidget(self._client_role_group, 1)
+        columns.addWidget(self._server_role_group, 1)
         connections_layout = QVBoxLayout(connections_tab)
         connections_layout.addLayout(columns, 2)
         connections_layout.addWidget(log_group, 1)
@@ -488,13 +491,11 @@ class MainWindow(QMainWindow):
         return button
 
     def _update_connections_groups(self) -> None:
-        """Show each Connections-tab role pair only while its role is on —
+        """Show each Connections-tab role box only while its role is on —
         a client-only instance has no viewers or pairings to display, and a
         server-only one has no sessions or server history."""
-        for group in (self._sharing_group, self._clients_group):
-            group.setVisible(self.sharing_tab.serving)
-        for group in (self._sessions_group, self._servers_group):
-            group.setVisible(self._viewer_enabled)
+        self._client_role_group.setVisible(self._viewer_enabled)
+        self._server_role_group.setVisible(self.sharing_tab.serving)
 
     def _update_performance_tabs(self) -> None:
         """Show a Performance sub-tab per role that can produce data."""
