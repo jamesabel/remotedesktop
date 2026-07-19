@@ -23,7 +23,7 @@ _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 
 
 def make_window(
-    tmp_path, credentials=None, *, serving=False, tray_available=False,
+    tmp_path, credentials=None, *, serving=False, viewer=True, tray_available=False,
     db_name="app.db", discovery_port=None, reconnect_base_seconds=2.0,
 ):
     """A MainWindow on a temp DB with everything injected.
@@ -36,6 +36,8 @@ def make_window(
     connection = db.connect(tmp_path / db_name)
     if serving:
         Settings(connection).set("server_enabled", "1")
+    if not viewer:
+        Settings(connection).set("viewer_enabled", "0")
     return MainWindow(
         connection=connection,
         auto_scan=False,
@@ -1069,3 +1071,63 @@ def test_closed_tabs_are_not_restored(qapp, credentials, tmp_path):
     finally:
         reopened.close()
         server.close()
+
+
+def test_server_only_instance_hides_client_ui(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True, viewer=False)
+    try:
+        tabs = window.centralWidget()
+        labels = [tabs.tabText(i) for i in range(tabs.count())]
+        assert "Server" not in labels  # no viewer role, no Server tab
+        assert labels[0] == "Connections"
+        assert window.discovery_panel.isHidden()
+        assert window._servers_group.isHidden()
+        assert not window.refresh_action.isEnabled()
+        assert not window.preferences_tab.viewer_checkbox.isChecked()
+        # The role indicators say what this instance is.
+        assert "Client (viewer): off" in window.client_role_label.text()
+        assert "Server (sharing): on" in window.server_role_label.text()
+    finally:
+        window.close()
+
+
+def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    tabs = window.centralWidget()
+    try:
+        assert "Client (viewer): on" in window.client_role_label.text()
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window._sessions[0].connected)
+
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert window._sessions == []  # open connections were closed
+        assert "Server" not in [tabs.tabText(i) for i in range(tabs.count())]
+        assert window.discovery_panel.isHidden()
+        assert window._servers_group.isHidden()
+        assert "Client (viewer): off" in window.client_role_label.text()
+        # With the role off, activation attempts are refused.
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        assert window._sessions == []
+
+        window.preferences_tab.viewer_checkbox.setChecked(True)
+        assert tabs.tabText(0) == "Server"  # the placeholder is back
+        assert not window.discovery_panel.isHidden()
+        assert not window._servers_group.isHidden()
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        pump(qapp, lambda: window._sessions and window._sessions[0].connected)
+    finally:
+        window.close()
+        server.close()
+
+
+def test_role_indicators_follow_sharing(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials)
+    try:
+        assert "Server (sharing): off" in window.server_role_label.text()
+        window.sharing_tab.set_mode("control")
+        assert "Server (sharing): on" in window.server_role_label.text()
+        window.sharing_tab.set_mode("off")
+        assert "Server (sharing): off" in window.server_role_label.text()
+    finally:
+        window.close()

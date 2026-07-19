@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -55,6 +54,7 @@ from remotedesktop.preferences import (
     PreferencesTab,
     load_clipboard_sync_enabled,
     load_performance_window_seconds,
+    load_viewer_enabled,
 )
 from remotedesktop.server import SharingTab
 from remotedesktop.sharing import ShareClient
@@ -82,10 +82,14 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self._reconnect_base = reconnect_base_seconds
+        self._auto_scan = auto_scan
         self.setWindowIcon(icon.app_icon("app"))
         # Tests inject a connection to a temp database; the app uses the default.
         self._db = connection if connection is not None else db.connect(default_db_path())
         self._settings = Settings(self._db)
+        # The viewer (client) role is opt-out: a dedicated server turns it
+        # off and loses the client-side UI (Server tab, discovery, history).
+        self._viewer_enabled = load_viewer_enabled(self._settings)
         # One monitor per role: ShareServer.close() resets its monitor, so
         # toggling sharing must not share a monitor with the viewing sessions
         # (and vice versa for _connect_session's reset).
@@ -137,7 +141,8 @@ class MainWindow(QMainWindow):
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.currentChanged.connect(self._on_current_tab_changed)
         self._no_session_page = self._build_no_session_page()
-        self._tabs.addTab(self._no_session_page, "Server")
+        if self._viewer_enabled:
+            self._tabs.addTab(self._no_session_page, "Server")
         # One "Connections" tab holds everything connection-related in a 2×2
         # grid: sharing status + viewers, both peer inventories, and the
         # connection log.
@@ -156,11 +161,12 @@ class MainWindow(QMainWindow):
         self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
 
         connections_tab = QWidget()
-        grid = QGridLayout(connections_tab)
         sharing_group = QGroupBox("Sharing this computer")
         QVBoxLayout(sharing_group).addWidget(self.sharing_tab)
-        servers_group = QGroupBox("Servers on LAN")
-        QVBoxLayout(servers_group).addWidget(
+        # Kept as an attribute: hidden when the viewer role is off (a
+        # server-only instance has no server history of its own).
+        self._servers_group = QGroupBox("Servers on LAN")
+        QVBoxLayout(self._servers_group).addWidget(
             InventoryTab(self.client_inventory, "Forget", self._forget_server)
         )
         clients_group = QGroupBox("Clients on LAN")
@@ -176,14 +182,19 @@ class MainWindow(QMainWindow):
         log_layout.addLayout(log_buttons)
         log_layout.addWidget(self.connection_log)
         # Left column: this computer (sharing status, log). Right column:
-        # the LAN peer tables.
-        grid.addWidget(sharing_group, 0, 0)
-        grid.addWidget(log_group, 1, 0)
-        grid.addWidget(servers_group, 0, 1)
-        grid.addWidget(clients_group, 1, 1)
-        for index in (0, 1):
-            grid.setColumnStretch(index, 1)
-            grid.setRowStretch(index, 1)
+        # the LAN peer tables. Column-level vboxes so a hidden group lets
+        # its neighbor take the full column.
+        left_column = QVBoxLayout()
+        left_column.addWidget(sharing_group)
+        left_column.addWidget(log_group)
+        right_column = QVBoxLayout()
+        right_column.addWidget(self._servers_group)
+        right_column.addWidget(clients_group)
+        columns = QHBoxLayout(connections_tab)
+        columns.addLayout(left_column, 1)
+        columns.addLayout(right_column, 1)
+        if not self._viewer_enabled:
+            self._servers_group.hide()
         self._tabs.addTab(connections_tab, "Connections")
         self.performance_pages = QTabWidget()
         self.performance_pages.addTab(
@@ -200,15 +211,29 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(performance_tab, "Performance")
         self.setCentralWidget(self._tabs)
 
-        # auto_scan=False (tests) never broadcasts on the LAN and starts no
-        # rescan timer; the app scans at startup and every 15 s while visible.
+        # auto_scan=False (tests) never broadcasts on the LAN; the app scans
+        # once at startup — and not at all without the viewer role.
         self.discovery_panel = DiscoveryPanel(
-            self, is_self=self._is_own_server, auto_scan=auto_scan
+            self,
+            is_self=self._is_own_server,
+            auto_scan=auto_scan and self._viewer_enabled,
         )
+        # The dock holds the role indicators (always) and the discovery
+        # panel (viewer role only).
+        self.client_role_label = QLabel()
+        self.server_role_label = QLabel()
+        dock_body = QWidget()
+        dock_layout = QVBoxLayout(dock_body)
+        dock_layout.addWidget(self.client_role_label)
+        dock_layout.addWidget(self.server_role_label)
+        dock_layout.addWidget(self.discovery_panel)
+        if not self._viewer_enabled:
+            self.discovery_panel.hide()
+            dock_layout.addStretch(1)
         self.servers_dock = QDockWidget("Servers", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
-        self.servers_dock.setWidget(self.discovery_panel)
+        self.servers_dock.setWidget(dock_body)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
 
         self.preferences_tab = PreferencesTab(
@@ -218,9 +243,10 @@ class MainWindow(QMainWindow):
             clipboard=self._clipboard,
         )
         self.preferences_tab.statusMessage.connect(self.log)
-        # Preferences drives the sharing lifecycle (the three-state choice
-        # lives there); SharingTab owns persistence and the ShareServer.
+        # Preferences drives both roles: the sharing lifecycle (the
+        # three-state choice) and the viewer role's UI.
         self.preferences_tab.sharingModeChanged.connect(self.sharing_tab.set_mode)
+        self.preferences_tab.viewerModeChanged.connect(self._set_viewer_enabled)
         self.preferences_tab.restart_button.clicked.connect(self._restart_app)
         self._tabs.addTab(self.preferences_tab, "Preferences")
         self._about_tab = AboutTab()
@@ -260,6 +286,7 @@ class MainWindow(QMainWindow):
         # that were open when the app last ran.
         self.sharing_tab.restore_sharing()
         self._restore_sessions()
+        self._update_role_indicators()
 
     # ------------------------------------------------------------- logging
 
@@ -295,6 +322,7 @@ class MainWindow(QMainWindow):
         self.refresh_action = self._view_menu.addAction("&Refresh server list")
         self.refresh_action.setShortcut(QKeySequence("F5"))
         self.refresh_action.triggered.connect(self.discovery_panel.refresh)
+        self.refresh_action.setEnabled(self._viewer_enabled)
         self._view_menu.addSeparator()
         self.actual_size_action = self._view_menu.addAction("&Actual size")
         self.actual_size_action.setCheckable(True)
@@ -352,10 +380,48 @@ class MainWindow(QMainWindow):
 
     def _ensure_placeholder(self) -> None:
         """Re-show the "Server" instructions tab once no session remains."""
-        if self._sessions or self._tabs.indexOf(self._no_session_page) != -1:
+        if (
+            not self._viewer_enabled
+            or self._sessions
+            or self._tabs.indexOf(self._no_session_page) != -1
+        ):
             return
         self._tabs.insertTab(0, self._no_session_page, "Server")
         self._strip_tab_buttons(0)  # a fresh insert grows new close buttons
+
+    def _update_role_indicators(self) -> None:
+        def line(on: bool, role: str, state: str) -> str:
+            color = "#2e7d32" if on else "#9e9e9e"
+            return f'<span style="color:{color}">●</span> {role}: {state}'
+
+        self.client_role_label.setText(
+            line(self._viewer_enabled, "Client (viewer)", "on" if self._viewer_enabled else "off")
+        )
+        serving = self.sharing_tab.serving
+        self.server_role_label.setText(
+            line(serving, "Server (sharing)", "on" if serving else "off")
+        )
+
+    def _set_viewer_enabled(self, enabled: bool) -> None:
+        """Show or hide the client-side UI as the viewer role toggles."""
+        self._viewer_enabled = enabled
+        if not enabled:
+            for session in list(self._sessions):
+                self._close_session(session)  # drops any open connections
+            placeholder_index = self._tabs.indexOf(self._no_session_page)
+            if placeholder_index != -1:
+                self._tabs.removeTab(placeholder_index)
+            self.discovery_panel.hide()
+            self._servers_group.hide()
+        else:
+            self.discovery_panel.show()
+            self._servers_group.show()
+            self._ensure_placeholder()
+            self._tabs.setCurrentIndex(0)
+            if self._auto_scan:
+                self.discovery_panel.refresh()  # becoming a viewer: scan now
+        self.refresh_action.setEnabled(enabled)
+        self._update_role_indicators()
 
     def _on_current_tab_changed(self, _index: int) -> None:
         self._refresh_status_bar()
@@ -508,6 +574,7 @@ class MainWindow(QMainWindow):
             self._tray.deleteLater()
             self._tray = None
         self._update_window_title()
+        self._update_role_indicators()
 
     def _quit(self) -> None:
         self._quitting = True
@@ -659,6 +726,8 @@ class MainWindow(QMainWindow):
         self._settings.set("open_sessions", json.dumps(entries))
 
     def _restore_sessions(self) -> None:
+        if not self._viewer_enabled:
+            return
         raw = self._settings.get("open_sessions")
         if not raw:
             return
@@ -738,6 +807,9 @@ class MainWindow(QMainWindow):
             )
 
     def _on_server_activated(self, server: ServerInfo) -> None:
+        if not self._viewer_enabled:
+            self.log("Viewer role is off — enable it in Preferences to connect")
+            return
         if self._is_own_server(server):
             # Viewing your own screen through yourself is a hall of mirrors;
             # the panel already blocks this, but guard the entry point too.
