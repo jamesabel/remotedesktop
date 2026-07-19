@@ -11,6 +11,7 @@ Installations upgraded from the separate server app may still carry the old
 startup) moves that registration to the new value name and command.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -22,10 +23,31 @@ _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE_NAME = "remotedesktop"
 _LEGACY_VALUE_NAME = "remotedesktop-server"  # the pre-1.0 server-only app
 
+# A pyship CLIP directory: <install dir>\remotedesktop_<version>\pythonw.exe.
+_CLIP_DIR_RE = re.compile(r"remotedesktop_\d+(\.\d+)*", re.IGNORECASE)
+
+
+def installed_launcher() -> Path | None:
+    """The pyship launcher exe, when running from an installed CLIP.
+
+    The launcher always starts the newest installed remotedesktop_<version>
+    directory, so registrations and relaunches that go through it survive
+    upgrades — a path into this CLIP would go stale instead.
+    """
+    exe_dir = Path(sys.executable).parent
+    if _CLIP_DIR_RE.fullmatch(exe_dir.name):
+        launcher = exe_dir.parent / "remotedesktop" / "remotedesktop.exe"
+        if launcher.exists():
+            return launcher
+    return None
+
 
 def app_command() -> str:
     """The command line that launches this installation at login."""
-    exe = Path(sys.executable).with_name("remotedesktop.exe")
+    launcher = installed_launcher()
+    if launcher is not None:
+        return f'"{launcher}" --minimized'
+    exe = Path(sys.executable).with_name("remotedesktop.exe")  # venv Scripts dir
     if exe.exists():
         return f'"{exe}" --minimized'
     # Fallback (e.g. running from source without the entry-point exe).

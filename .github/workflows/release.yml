@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the tag and the release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -46,3 +48,24 @@ jobs:
             --title "${{ steps.version.outputs.version }}" \
             --generate-notes \
             dist/*
+
+  # Unsigned installer build (the signing token is local-only). To replace it
+  # with a signed one: run scripts\make_installer.bat locally, then
+  #   gh release upload v<version> installers\remotedesktop_installer_win64.exe --clobber
+  installer:
+    needs: release
+    runs-on: windows-latest # NSIS and .NET Framework csc.exe are preinstalled
+    permissions:
+      contents: write # upload the installer to the release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build installer
+        run: uv run --group ship python -m pyship --noupload
+      - name: Attach installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "v${{ needs.release.outputs.version }}"
+          --repo "$env:GITHUB_REPOSITORY" --clobber
+          installers/remotedesktop_installer_win64.exe

@@ -1,6 +1,9 @@
-import pytest
+from pathlib import Path
 
-from remotedesktop.icon import app_icon
+import pytest
+from PIL import Image
+
+from remotedesktop.icon import _SIZES, app_icon
 
 
 def test_icon_renders_at_all_sizes(qapp):
@@ -18,3 +21,11 @@ def test_default_role_is_app(qapp):
 def test_unknown_role_is_rejected(qapp):
     with pytest.raises(KeyError):
         app_icon("toaster")
+
+
+def test_checked_in_ico_has_all_sizes():
+    # icon/remotedesktop.ico is build input for the pyship installer/launcher;
+    # regenerate with tools/make_icon.py after changing the drawn icon.
+    ico_path = Path(__file__).parent.parent / "icon" / "remotedesktop.ico"
+    with Image.open(ico_path) as ico:
+        assert {(s, s) for s in _SIZES} <= set(ico.info["sizes"])

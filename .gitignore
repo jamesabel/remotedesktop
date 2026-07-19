@@ -10,6 +10,12 @@ dist/
 .venv/
 venv/
 
+# pyship build output (scripts/make_installer.bat); *.nsi is left behind
+# only if makensis fails mid-run
+app/
+installers/
+*.nsi
+
 # Testing
 .pytest_cache/
 .coverage

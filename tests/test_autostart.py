@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from remotedesktop.autostart import Autostart, app_command
+from remotedesktop.autostart import Autostart, app_command, installed_launcher
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows registry")
 
@@ -51,6 +51,34 @@ def test_app_command_is_quoted_launchable_and_minimized():
     assert "remotedesktop" in command
     # Login-started instances go straight to the tray when sharing.
     assert command.endswith("--minimized")
+
+
+def test_app_command_prefers_installed_launcher(tmp_path, monkeypatch):
+    # A pyship install: sys.executable inside a versioned CLIP dir, the
+    # launcher exe (which always starts the newest CLIP) one level up.
+    clip_python = tmp_path / "remotedesktop_1.2.3" / "pythonw.exe"
+    clip_python.parent.mkdir()
+    clip_python.touch()
+    launcher = tmp_path / "remotedesktop" / "remotedesktop.exe"
+    launcher.parent.mkdir()
+    launcher.touch()
+    monkeypatch.setattr(sys, "executable", str(clip_python))
+    assert installed_launcher() == launcher
+    assert app_command() == f'"{launcher}" --minimized'
+
+
+def test_non_clip_layout_is_not_mistaken_for_an_install(tmp_path, monkeypatch):
+    # Same sibling layout but the interpreter dir isn't a versioned CLIP dir —
+    # must fall back rather than register a look-alike exe.
+    python = tmp_path / "Scripts" / "pythonw.exe"
+    python.parent.mkdir()
+    python.touch()
+    lookalike = tmp_path / "remotedesktop" / "remotedesktop.exe"
+    lookalike.parent.mkdir()
+    lookalike.touch()
+    monkeypatch.setattr(sys, "executable", str(python))
+    assert installed_launcher() is None
+    assert app_command() == f'"{python}" -m remotedesktop --minimized'
 
 
 def test_legacy_server_registration_migrates(autostart):

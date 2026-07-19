@@ -35,6 +35,15 @@ dev = [
     "pytest>=8",
     "pytest-cov>=7.1.0",
 ]
+# Only for building the Windows installer (scripts/make_installer.bat / release CI).
+ship = [
+    "pyship>=0.7.3",
+]
+
+# TODO(pyship-0.7.3): temporary local override until pyship 0.7.3 is on PyPI —
+# remove this section and re-run `uv lock` before merging.
+[tool.uv.sources]
+pyship = { path = "../pyship" }
 
 [build-system]
 requires = ["hatchling"]
@@ -45,6 +54,15 @@ path = "src/remotedesktop/__init__.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyship]
+ui = "gui"
+# Never upload to S3, even without --noupload. Code signing stays out of this
+# config on purpose: CI installer builds are unsigned (the signing token is
+# local-only); scripts/make_installer.bat passes the signing flags.
+upload = false
+# run_on_startup deliberately NOT set: it would write an HKLM Run value named
+# "remotedesktop", colliding with the app's own HKCU autostart preference.
 
 [tool.ty.environment]
 # The app targets Windows (SendInput via ctypes.windll); type-check as such
