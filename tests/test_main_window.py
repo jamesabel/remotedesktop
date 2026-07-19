@@ -105,10 +105,10 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         connections_tab = tabs.widget(labels.index("Connections"))
         groups = [g.title() for g in connections_tab.findChildren(QGroupBox)]
         assert groups == [
-            "Sharing this computer",
+            "Server (sharing this computer)",
             "Connection log",
-            "Servers on LAN",
-            "Clients on LAN",
+            "Server history",
+            "Client history",
         ]
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
@@ -629,7 +629,7 @@ def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
         window.servers_dock.close()
         assert not window.servers_dock.isVisible()
         # The View menu toggle is the way back.
-        _menu_actions(window, "&View")["&Servers panel"].trigger()
+        _menu_actions(window, "&View")["&Servers on LAN panel"].trigger()
         assert window.servers_dock.isVisible()
         # Close it again; the layout persists to the next start (same DB).
         window.servers_dock.close()
@@ -1197,22 +1197,22 @@ def test_performance_subtabs_follow_the_roles(qapp, credentials, tmp_path):
         return [pages.tabText(i) for i in range(pages.count())]
 
     try:
-        assert titles() == ["Viewing"]  # no sharing data to show yet
+        assert titles() == ["Client (viewer)"]  # no sharing data to show yet
         window.sharing_tab.set_mode("control")
-        assert titles() == ["Viewing", "Sharing"]
+        assert titles() == ["Client (viewer)", "Server (sharing)"]
         window.preferences_tab.viewer_checkbox.setChecked(False)
-        assert titles() == ["Sharing"]
+        assert titles() == ["Server (sharing)"]
         window.sharing_tab.set_mode("off")
         assert titles() == []
         # Both roles off: the pages hide and a hint explains why.
         assert pages.isHidden()
         assert not window._performance_hint.isHidden()
         window.preferences_tab.viewer_checkbox.setChecked(True)
-        assert titles() == ["Viewing"]
+        assert titles() == ["Client (viewer)"]
         assert not pages.isHidden()
         assert window._performance_hint.isHidden()
-        # Re-enabling sharing puts Sharing back after Viewing.
+        # Re-enabling sharing puts the server sub-tab back after the client's.
         window.sharing_tab.set_mode("view")
-        assert titles() == ["Viewing", "Sharing"]
+        assert titles() == ["Client (viewer)", "Server (sharing)"]
     finally:
         window.close()

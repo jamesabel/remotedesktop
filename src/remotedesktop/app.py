@@ -161,15 +161,17 @@ class MainWindow(QMainWindow):
         self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
 
         connections_tab = QWidget()
-        sharing_group = QGroupBox("Sharing this computer")
+        sharing_group = QGroupBox("Server (sharing this computer)")
         QVBoxLayout(sharing_group).addWidget(self.sharing_tab)
         # Kept as an attribute: hidden when the viewer role is off (a
-        # server-only instance has no server history of its own).
-        self._servers_group = QGroupBox("Servers on LAN")
+        # server-only instance has no server history of its own). "History"
+        # (not "on LAN") — the live discovery list is the Servers on LAN
+        # panel; these tables are the persisted first/last-seen records.
+        self._servers_group = QGroupBox("Server history")
         QVBoxLayout(self._servers_group).addWidget(
             InventoryTab(self.client_inventory, "Forget", self._forget_server)
         )
-        clients_group = QGroupBox("Clients on LAN")
+        clients_group = QGroupBox("Client history")
         QVBoxLayout(clients_group).addWidget(
             InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
         )
@@ -208,8 +210,8 @@ class MainWindow(QMainWindow):
             self.server_performance, local="server", remote="client"
         )
         self._performance_hint = QLabel(
-            "Nothing to measure — enable the Viewer role or Screen sharing "
-            "in the Preferences tab"
+            "Nothing to measure — enable the Client (viewer) or "
+            "Server (sharing) role in the Preferences tab"
         )
         self._performance_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._performance_hint.hide()
@@ -248,7 +250,7 @@ class MainWindow(QMainWindow):
         if not self._viewer_enabled:
             self.discovery_panel.hide()
         self._update_dock_layout()
-        self.servers_dock = QDockWidget("Servers", self)
+        self.servers_dock = QDockWidget("Servers on LAN", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
         # Closable (the X) but never floatable/movable: the panel lives on
@@ -339,7 +341,7 @@ class MainWindow(QMainWindow):
         self._view_menu = bar.addMenu("&View")
         # The dock's own toggle action: the way back after closing the panel.
         self.servers_panel_action = self.servers_dock.toggleViewAction()
-        self.servers_panel_action.setText("&Servers panel")
+        self.servers_panel_action.setText("&Servers on LAN panel")
         self._view_menu.addAction(self.servers_panel_action)
         self.refresh_action = self._view_menu.addAction("&Refresh server list")
         self.refresh_action.setShortcut(QKeySequence("F5"))
@@ -380,12 +382,12 @@ class MainWindow(QMainWindow):
         label = QLabel(
             "<h3>No server connected</h3>"
             "<p>Computers sharing their screen appear automatically in the "
-            "<b>Servers</b> panel on the left<br>(View&nbsp;▸&nbsp;Servers "
-            "panel if it is hidden).</p>"
+            "<b>Servers on LAN</b> panel on the left<br>"
+            "(View&nbsp;▸&nbsp;Servers on LAN panel if it is hidden).</p>"
             "<p>Double-click one — or select it and click <b>Connect</b> — "
             "and this tab becomes your view of that computer.</p>"
-            "<p>To make a computer appear in the list, turn on "
-            "<b>Screen sharing</b> in the Preferences tab on that computer.</p>"
+            "<p>To make a computer appear in the list, enable "
+            "<b>Server (sharing)</b> in the Preferences tab on that computer.</p>"
         )
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setWordWrap(True)
@@ -436,8 +438,8 @@ class MainWindow(QMainWindow):
             elif not wanted and index != -1:
                 pages.removeTab(index)
 
-        sync(self._viewing_perf_page, "Viewing", self._viewer_enabled, front=True)
-        sync(self._sharing_perf_page, "Sharing", self.sharing_tab.serving, front=False)
+        sync(self._viewing_perf_page, "Client (viewer)", self._viewer_enabled, front=True)
+        sync(self._sharing_perf_page, "Server (sharing)", self.sharing_tab.serving, front=False)
         empty = pages.count() == 0
         pages.setVisible(not empty)
         self._performance_hint.setVisible(empty)

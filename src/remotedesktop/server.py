@@ -326,7 +326,7 @@ class SharingTab(QWidget):
         self.viewerCountChanged.emit(client_count if self.serving else 0)
         if self.share_server is None:
             self._summary.setText(
-                "Not sharing this computer's screen — turn on Screen sharing "
+                "Not sharing this computer's screen — enable Server (sharing) "
                 "in the Preferences tab to let others view this computer"
             )
             return
