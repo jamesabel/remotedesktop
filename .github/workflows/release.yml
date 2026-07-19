@@ -54,12 +54,16 @@ jobs:
   #   gh release upload v<version> installers\remotedesktop_installer_win64.exe --clobber
   installer:
     needs: release
-    runs-on: windows-latest # NSIS and .NET Framework csc.exe are preinstalled
+    runs-on: windows-latest # .NET Framework csc.exe is preinstalled (launcher build)
     permissions:
       contents: write # upload the installer to the release
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - name: Install NSIS
+        # Not preinstalled on windows-latest; choco puts makensis.exe at
+        # C:\Program Files (x86)\NSIS\makensis.exe, pyship's default path.
+        run: choco install nsis -y --no-progress
       - name: Build installer
         run: uv run --group ship python -m pyship --noupload
       - name: Attach installer to release
