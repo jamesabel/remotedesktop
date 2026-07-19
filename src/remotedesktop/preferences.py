@@ -33,10 +33,15 @@ from remotedesktop.server import (
 PERFORMANCE_WINDOW_KEY = "performance_window_seconds"
 DEFAULT_PERFORMANCE_WINDOW_SECONDS = 120
 CLIPBOARD_SYNC_KEY = "clipboard_sync_enabled"
+VIEWER_KEY = "viewer_enabled"
 
 
 def load_clipboard_sync_enabled(settings: Settings) -> bool:
     return settings.get(CLIPBOARD_SYNC_KEY, "1") != "0"
+
+
+def load_viewer_enabled(settings: Settings) -> bool:
+    return settings.get(VIEWER_KEY, "1") != "0"
 
 
 def load_performance_window_seconds(settings: Settings) -> int:
@@ -53,6 +58,9 @@ class PreferencesTab(QWidget):
     # The three-state sharing mode ("off"/"view"/"control"); the window wires
     # this to SharingTab.set_mode, which owns persistence and the lifecycle.
     sharingModeChanged = Signal(str)
+    # The viewer (client) role: whether this instance connects to other
+    # computers at all. The window shows/hides the client UI accordingly.
+    viewerModeChanged = Signal(bool)
 
     def __init__(
         self,
@@ -110,7 +118,11 @@ class PreferencesTab(QWidget):
             "clicked from a remote desktop session, so an update doesn't "
             "require visiting this computer."
         )
+        self.viewer_checkbox = QCheckBox("Connect to and view other computers")
+        self.viewer_checkbox.setChecked(load_viewer_enabled(settings))
+        self.viewer_checkbox.toggled.connect(self._on_viewer_toggled)
         layout = QFormLayout(self)
+        layout.addRow("Viewer", self.viewer_checkbox)
         layout.addRow("Screen sharing", sharing_box)
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
@@ -130,6 +142,15 @@ class PreferencesTab(QWidget):
             if checked
             else "Remote Desktop will no longer start at login"
         )
+
+    def _on_viewer_toggled(self, checked: bool) -> None:
+        self._settings.set(VIEWER_KEY, "1" if checked else "0")
+        self.statusMessage.emit(
+            "Viewer role enabled — this computer can connect to others"
+            if checked
+            else "Viewer role disabled — this computer only serves"
+        )
+        self.viewerModeChanged.emit(checked)
 
     def _on_clipboard_toggled(self, checked: bool) -> None:
         self._settings.set(CLIPBOARD_SYNC_KEY, "1" if checked else "0")

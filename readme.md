@@ -46,7 +46,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 
 ## Features
 
-- 🧩 **One app, both roles** — every install can view other computers and share its own screen at the same time; sharing is a three-state choice in Preferences (*Not shared* / *view only* / *full control*), and only one instance runs per computer (launching it again just raises the existing window).
+- 🧩 **One app, either or both roles** — every install can view other computers and share its own screen at the same time. Both roles are chosen in Preferences: *Screen sharing* is a three-state choice (*Not shared* / *view only* / *full control*), and a *Viewer* toggle turns the client side off entirely for dedicated servers — the UI shows only the components for the roles you enabled, with indicators in the left pane saying what this instance is. Only one instance runs per computer (launching it again just raises the existing window).
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN at startup, no addresses to type (press *Refresh* or F5 to rescan).
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
