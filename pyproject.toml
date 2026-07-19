@@ -37,13 +37,8 @@ dev = [
 ]
 # Only for building the Windows installer (scripts/make_installer.bat / release CI).
 ship = [
-    "pyship>=0.7.3",
+    "pyship>=0.7.4",
 ]
-
-# TODO(pyship-0.7.3): temporary local override until pyship 0.7.3 is on PyPI —
-# remove this section and re-run `uv lock` before merging.
-[tool.uv.sources]
-pyship = { path = "../pyship" }
 
 [build-system]
 requires = ["hatchling"]
