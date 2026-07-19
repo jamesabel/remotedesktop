@@ -626,13 +626,16 @@ def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
     try:
         window.show()
         assert window.servers_dock.isVisible()
-        window.servers_dock.close()
+        # Headerless dock: there is no X, so View ▸ Panel is the user's way
+        # to hide and reopen it (the action must stay enabled).
+        panel_action = _menu_actions(window, "&View")["&Panel"]
+        assert panel_action.isEnabled()
+        panel_action.trigger()  # hide
         assert not window.servers_dock.isVisible()
-        # The View menu toggle is the way back.
-        _menu_actions(window, "&View")["&Servers on LAN panel"].trigger()
+        panel_action.trigger()  # and back
         assert window.servers_dock.isVisible()
-        # Close it again; the layout persists to the next start (same DB).
-        window.servers_dock.close()
+        # Hide it again; the layout persists to the next start (same DB).
+        panel_action.trigger()
     finally:
         window.close()
 
@@ -702,7 +705,7 @@ def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
         session = window._sessions[0]
         pump(qapp, lambda: session.connected)
-        window.servers_dock.close()  # user had closed the dock beforehand
+        window.servers_panel_action.trigger()  # user had hidden the panel beforehand
 
         assert window.fullscreen_action.isEnabled()
         window.fullscreen_action.trigger()
@@ -1139,6 +1142,7 @@ def test_servers_dock_is_closable_but_not_floatable(qapp, tmp_path):
     window = make_window(tmp_path)
     try:
         assert window.servers_dock.features() == QDockWidget.DockWidgetFeature.DockWidgetClosable
+        assert window.servers_dock.titleBarWidget() is not None  # headerless
     finally:
         window.close()
 
