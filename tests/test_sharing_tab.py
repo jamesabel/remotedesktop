@@ -316,9 +316,9 @@ def test_viewers_table_lists_connected_client_details(qapp, credentials, tmp_pat
             item = tab.viewers_table.item(0, column)
             assert item is not None
             row.append(item.text())
-        name, address, user, host, os_info, version, send, recv, rtt = row[:9]
-        # The hello carried this machine's real login/host/OS/version details.
-        assert name and user != "—" and host != "—"
+        name, address, user, os_info, version, send, recv, rtt = row[:8]
+        # The hello carried this machine's real login/OS/version details.
+        assert name and user != "—"
         assert "127.0.0.1" in address and "::ffff:" not in address
         assert os_info.startswith("Windows")
         from remotedesktop import __version__
