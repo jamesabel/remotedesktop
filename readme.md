@@ -10,7 +10,7 @@
 
 Run the same app on every computer. Turn on *Server (sharing)* (view only or
 full control) in Preferences on the ones you want to reach, and they appear
-automatically in every other instance's *Servers on LAN* panel: the first
+automatically in every other instance's left-hand panel: the first
 connection is approved with one click on the shared computer, and from then
 on it reconnects instantly. View several computers at once — each in its own tab — while
 optionally sharing your own screen at the same time; closing the window
