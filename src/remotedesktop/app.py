@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from remotedesktop import __version__, compat, db, icon, logs, window_state
 from remotedesktop.about import AboutTab
-from remotedesktop.autostart import Autostart
+from remotedesktop.autostart import Autostart, installed_launcher
 from remotedesktop.client import DiscoveryPanel, ServerSession
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
@@ -778,14 +778,22 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+        # An installed (pyship) instance relaunches via the launcher exe, which
+        # picks the newest installed version — so restart-after-update actually
+        # starts the update. From source/venv, relaunch this interpreter.
+        launcher = installed_launcher()
+        if launcher is not None:
+            program, args = str(launcher), []
+        else:
+            program, args = sys.executable, ["-m", "remotedesktop"]
         self.log("Restarting: freeing ports and launching a new process")
-        _log.info("Restart requested — relaunching %s -m remotedesktop", sys.executable)
+        _log.info("Restart requested — relaunching %s %s", program, " ".join(args))
         self.sharing_tab.shutdown()
-        if not QProcess.startDetached(sys.executable, ["-m", "remotedesktop"]):
-            # Extremely unlikely (sys.executable exists); the app stays open —
+        if not QProcess.startDetached(program, args):
+            # Extremely unlikely (the program path exists); the app stays open —
             # sharing is stopped, but the machine isn't left with nothing.
             self.log("Restart failed: could not launch a new process — restart manually")
-            _log.error("QProcess.startDetached failed for %s", sys.executable)
+            _log.error("QProcess.startDetached failed for %s", program)
             return
         self._quit()
 

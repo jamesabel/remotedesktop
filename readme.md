@@ -67,6 +67,13 @@ for mostly-static desktop work.
 
 ## Installation
 
+The easiest way: download `remotedesktop_installer_win64.exe` from the
+[latest release](https://github.com/jamesabel/remotedesktop/releases/latest)
+and run it — no Python required. To upgrade, quit the app first (tray →
+Quit if it's sharing), then run the newer installer.
+
+With Python, from PyPI:
+
 ```
 pip install remotedesktop
 ```

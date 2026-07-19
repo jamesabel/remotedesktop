@@ -34,6 +34,21 @@ attached. It is idempotent (skips if the release exists) and can be run
 manually via workflow_dispatch. PyPI publishing stays manual (`uv publish`),
 only on the user's explicit request.
 
+The same workflow's `installer` job (windows-latest) builds the **pyship
+installer** (`uv run --group ship python -m pyship --noupload`) and attaches
+it to the release — **unsigned**, because the signing token is local-only. To
+ship a signed installer, build locally (`scripts\make_installer.bat`) and
+replace the asset:
+`gh release upload v<version> installers\remotedesktop_installer_win64.exe --clobber`.
+The frozen app is a pyship CLIP (a full standalone CPython), so `pythonw.exe
+-m remotedesktop` still works inside it; `autostart.installed_launcher()`
+detects the install (CLIP dir name `remotedesktop_<version>`) and points
+autostart/restart at the launcher exe, which always starts the newest
+installed version. Users must quit the app before running an installer — a
+running instance holds the CLIP's DLLs locked. Do not set
+`[tool.pyship] run_on_startup` or signing keys in `pyproject.toml` (see the
+comments there).
+
 ## Commands
 
 Managed with `uv` (hatchling build backend, src layout):
@@ -44,6 +59,13 @@ Managed with `uv` (hatchling build backend, src layout):
 - `uv run remotedesktop` — launch the app. It's a `gui-script`, so it runs detached with no console output; use `uv run python -m remotedesktop` when you need stdout/tracebacks. `--minimized` starts hidden in the tray when sharing is on (what the autostart registration passes).
 - `uv build` — build sdist and wheel into `dist/`
 - `uv publish` — publish to PyPI
+- `scripts\make_installer.bat` — build the **signed Windows installer** with pyship
+  (`installers\remotedesktop_installer_win64.exe`). Needs the hardware signing token and a
+  local console session (pyship refuses token signing over RDP); set
+  `PYSHIP_SIGNING_CERTIFICATE_PIN` for unattended signing. pyship wipes and rebuilds
+  `dist/`, `app/` (launcher exe + frozen CLIP), and `installers/` — all gitignored.
+  `icon/remotedesktop.ico` is the build-input icon; regenerate with
+  `uv run python tools/make_icon.py` after changing `icon.py` (a test guards it).
 
 ## Architecture
 
