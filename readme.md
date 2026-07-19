@@ -39,7 +39,7 @@ time with live statistics.
 
 Sharing is turned on in Preferences (*view only* or *full control*). The
 *Connections* tab then shows everything in one place: every connected
-viewer — who they are (login name, computer, OS) and how the connection is
+viewer — who they are (name, login, OS) and how the connection is
 doing (bandwidth, round-trip time with mean/min/max/p99/jitter over the
 recent window) — the history of servers seen and clients paired with
 one-click *Forget* / *Revoke*, and the live connection log.
@@ -50,7 +50,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN at startup, no addresses to type (press *Refresh* or F5 to rescan).
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
-- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared — viewers can watch only* and sharing becomes view-only, switchable live.
+- ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared, view only* and sharing becomes view-only, switchable live.
 - 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
@@ -85,8 +85,8 @@ it prepares the environment on first use and launches the app.
 1. Run `remotedesktop` on both computers.
 2. On the computer to share, open *Preferences* and set *Server (sharing)*
    to one of the *Shared* modes.
-3. On the viewing computer, the shared computer appears in the *Servers*
-   panel — double-click it.
+3. On the viewing computer, the shared computer appears in the panel on
+   the left — double-click it (or select it and click *Connect*).
 4. Approve the connection in the dialog that pops up on the shared
    computer. That's it — future connections from that computer need no
    approval.
