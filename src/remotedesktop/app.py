@@ -16,7 +16,7 @@ import sqlite3
 import sys
 import time
 
-from PySide6.QtCore import QProcess, Qt, QTimer
+from PySide6.QtCore import QObject, QProcess, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
@@ -56,7 +56,7 @@ from remotedesktop.preferences import (
     load_performance_window_seconds,
     load_viewer_enabled,
 )
-from remotedesktop.server import SharingTab
+from remotedesktop.server import SharingTab, ViewersTable
 from remotedesktop.sharing import ShareClient
 from remotedesktop.single_instance import SingleInstance
 from remotedesktop.viewer import ViewerWidget
@@ -65,6 +65,52 @@ _log = logging.getLogger("remotedesktop.app")
 
 # Auto-reconnect backoff never waits longer than this between attempts.
 _RECONNECT_CAP_SECONDS = 30.0
+
+
+class _SessionsTable(ViewersTable):
+    """The client-side twin of the viewers table: one row per connected
+    server session, with the same live network statistics."""
+
+    _COLUMNS = [
+        "Name", "Address", "Version", "Send", "Receive",
+        "RTT", "RTT mean", "RTT min", "RTT max", "RTT p99", "RTT jitter",
+    ]
+    _RATE_COLUMNS = (3, 4)
+    _MS_COLUMNS = (5, 6, 7, 8, 9, 10)
+    _METRIC_COLUMNS = _RATE_COLUMNS + _MS_COLUMNS
+
+    def _identity_values(self, viewer: dict) -> list[str]:
+        return [
+            viewer["name"] or "(unknown)",
+            viewer["address"],
+            self._version_cell(viewer["app_version"]),
+        ]
+
+
+class _ConnectedServersSource(QObject):
+    """Adapts the window's connected sessions to the ViewersTable source
+    protocol (a `viewers()` method plus a change signal)."""
+
+    clientCountChanged = Signal(int)
+
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__(window)
+        self._window = window
+
+    def viewers(self) -> list[dict]:
+        return [
+            {
+                "name": session.name,
+                "address": session.key,
+                "app_version": session.client.server_app_version,
+                "stream": session.client.stream,
+            }
+            for session in self._window._sessions
+            if session.connected
+        ]
+
+    def notify(self) -> None:
+        self.clientCountChanged.emit(len(self.viewers()))
 
 
 class MainWindow(QMainWindow):
@@ -161,19 +207,27 @@ class MainWindow(QMainWindow):
         self.get_client_log_button.clicked.connect(self.sharing_tab.request_client_log)
 
         connections_tab = QWidget()
-        sharing_group = QGroupBox("Server (sharing this computer)")
-        QVBoxLayout(sharing_group).addWidget(self.sharing_tab)
-        # Kept as an attribute: hidden when the viewer role is off (a
-        # server-only instance has no server history of its own). "History"
-        # (not "on LAN") — the live discovery list is the Servers on LAN
+        # Server-role pair: live sharing status/viewers plus the persisted
+        # client pairings. Client-role pair: live connected-server sessions
+        # (with the same network statistics as the viewers table) plus the
+        # persisted server records. Each pair shows only while its role can
+        # put something in it (_update_connections_groups).
+        self._sharing_group = QGroupBox("Server (sharing this computer)")
+        QVBoxLayout(self._sharing_group).addWidget(self.sharing_tab)
+        self._clients_group = QGroupBox("Client history")
+        QVBoxLayout(self._clients_group).addWidget(
+            InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
+        )
+        self._sessions_source = _ConnectedServersSource(self)
+        self.sessions_table = _SessionsTable(self.client_performance)
+        self.sessions_table.set_share_server(self._sessions_source)
+        self._sessions_group = QGroupBox("Client (connected servers)")
+        QVBoxLayout(self._sessions_group).addWidget(self.sessions_table)
+        # "History" (not "on LAN") — the live discovery list is the left
         # panel; these tables are the persisted first/last-seen records.
         self._servers_group = QGroupBox("Server history")
         QVBoxLayout(self._servers_group).addWidget(
             InventoryTab(self.client_inventory, "Forget", self._forget_server)
-        )
-        clients_group = QGroupBox("Client history")
-        QVBoxLayout(clients_group).addWidget(
-            InventoryTab(self.server_inventory, "Revoke", self._revoke_client)
         )
         log_group = QGroupBox("Connection log")
         log_layout = QVBoxLayout(log_group)
@@ -183,20 +237,22 @@ class MainWindow(QMainWindow):
         log_buttons.addStretch(1)
         log_layout.addLayout(log_buttons)
         log_layout.addWidget(self.connection_log)
-        # Left column: this computer (sharing status, log). Right column:
-        # the LAN peer tables. Column-level vboxes so a hidden group lets
-        # its neighbor take the full column.
+        # Left column: the server role. Right column: the client role.
+        # The log spans the bottom. Column-level vboxes so a hidden group
+        # lets its neighbor take the full column.
         left_column = QVBoxLayout()
-        left_column.addWidget(sharing_group)
-        left_column.addWidget(log_group)
+        left_column.addWidget(self._sharing_group)
+        left_column.addWidget(self._clients_group)
         right_column = QVBoxLayout()
+        right_column.addWidget(self._sessions_group)
         right_column.addWidget(self._servers_group)
-        right_column.addWidget(clients_group)
-        columns = QHBoxLayout(connections_tab)
+        columns = QHBoxLayout()
         columns.addLayout(left_column, 1)
         columns.addLayout(right_column, 1)
-        if not self._viewer_enabled:
-            self._servers_group.hide()
+        connections_layout = QVBoxLayout(connections_tab)
+        connections_layout.addLayout(columns, 2)
+        connections_layout.addWidget(log_group, 1)
+        self._update_connections_groups()
         self._tabs.addTab(connections_tab, "Connections")
         # The Performance sub-tabs follow the roles: "Viewing" exists only
         # with the viewer role, "Sharing" only while actually serving —
@@ -255,13 +311,13 @@ class MainWindow(QMainWindow):
         # strip whose only job was the X earned no space. The Closable
         # feature must stay even though there is no X: without it Qt
         # disables the toggleViewAction, killing the View-menu toggle.
-        self.servers_dock = QDockWidget("", self)
+        self.panel_dock = QDockWidget("", self)
         # An object name is required for saveState() to persist the dock.
-        self.servers_dock.setObjectName("servers_dock")
-        self.servers_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        self.servers_dock.setTitleBarWidget(QWidget(self.servers_dock))
-        self.servers_dock.setWidget(dock_body)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
+        self.panel_dock.setObjectName("panel_dock")
+        self.panel_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.panel_dock.setTitleBarWidget(QWidget(self.panel_dock))
+        self.panel_dock.setWidget(dock_body)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.panel_dock)
 
         self.preferences_tab = PreferencesTab(
             self._settings,
@@ -344,9 +400,9 @@ class MainWindow(QMainWindow):
         self.quit_action.triggered.connect(self._quit)
         self._view_menu = bar.addMenu("&View")
         # The dock's own toggle action: the way back after closing the panel.
-        self.servers_panel_action = self.servers_dock.toggleViewAction()
-        self.servers_panel_action.setText("&Panel")
-        self._view_menu.addAction(self.servers_panel_action)
+        self.panel_action = self.panel_dock.toggleViewAction()
+        self.panel_action.setText("&Panel")
+        self._view_menu.addAction(self.panel_action)
         self.refresh_action = self._view_menu.addAction("&Refresh server list")
         self.refresh_action.setShortcut(QKeySequence("F5"))
         self.refresh_action.triggered.connect(self.discovery_panel.refresh)
@@ -431,6 +487,15 @@ class MainWindow(QMainWindow):
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
 
+    def _update_connections_groups(self) -> None:
+        """Show each Connections-tab role pair only while its role is on —
+        a client-only instance has no viewers or pairings to display, and a
+        server-only one has no sessions or server history."""
+        for group in (self._sharing_group, self._clients_group):
+            group.setVisible(self.sharing_tab.serving)
+        for group in (self._sessions_group, self._servers_group):
+            group.setVisible(self._viewer_enabled)
+
     def _update_performance_tabs(self) -> None:
         """Show a Performance sub-tab per role that can produce data."""
         pages = self.performance_pages
@@ -475,10 +540,8 @@ class MainWindow(QMainWindow):
             if placeholder_index != -1:
                 self._tabs.removeTab(placeholder_index)
             self.discovery_panel.hide()
-            self._servers_group.hide()
         else:
             self.discovery_panel.show()
-            self._servers_group.show()
             self._ensure_placeholder()
             self._tabs.setCurrentIndex(0)
             if self._auto_scan:
@@ -487,6 +550,7 @@ class MainWindow(QMainWindow):
         self._update_dock_layout()
         self._update_role_indicators()
         self._update_performance_tabs()
+        self._update_connections_groups()
 
     def _on_current_tab_changed(self, _index: int) -> None:
         self._refresh_status_bar()
@@ -525,11 +589,11 @@ class MainWindow(QMainWindow):
             return
         self._fullscreen_state = {
             "maximized": self.isMaximized(),
-            "dock_visible": self.servers_dock.isVisible(),
+            "dock_visible": self.panel_dock.isVisible(),
         }
         self.menuBar().hide()
         self.statusBar().hide()
-        self.servers_dock.hide()
+        self.panel_dock.hide()
         self._tabs.tabBar().hide()
         self.showFullScreen()
         self.fullscreen_action.setChecked(True)
@@ -546,7 +610,7 @@ class MainWindow(QMainWindow):
         self.menuBar().show()
         self.statusBar().show()
         # A dock the user had closed before fullscreen stays closed.
-        self.servers_dock.setVisible(state["dock_visible"])
+        self.panel_dock.setVisible(state["dock_visible"])
         self._tabs.tabBar().show()
         if state["maximized"]:
             self.showMaximized()
@@ -641,6 +705,7 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self._update_role_indicators()
         self._update_performance_tabs()
+        self._update_connections_groups()
 
     def _quit(self) -> None:
         self._quitting = True
@@ -979,6 +1044,7 @@ class MainWindow(QMainWindow):
         self.log(f"Closed connection to {session.name} ({session.key})")
         self._update_window_title()
         self._refresh_status_bar()
+        self._sessions_source.notify()
 
     def _on_tab_close_requested(self, index: int) -> None:
         if index < len(self._sessions):  # fixed tabs carry no close button
@@ -1034,6 +1100,7 @@ class MainWindow(QMainWindow):
             box.show()  # non-modal: streaming continues behind it
         self.client_inventory.record(session.key, "connected", name=session.name)
         self._persist_sessions()  # the welcome may have renamed the session
+        self._sessions_source.notify()
         session.viewer.setFocus()
         self._set_session_status(
             session,
@@ -1071,6 +1138,7 @@ class MainWindow(QMainWindow):
             session.viewer.clear("Disconnected")
             self._set_session_status(session, f"Disconnected from {session.name}")
         self._update_window_title()
+        self._sessions_source.notify()
         if session.auto_reconnect and not session.denied and not self._quitting:
             self._schedule_reconnect(session)
 

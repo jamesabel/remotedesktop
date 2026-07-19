@@ -757,6 +757,11 @@ class ShareClient(QObject):
         self._stream.frameReceived.connect(self._on_frame)
         self._stream.deltaReceived.connect(self._on_delta)
 
+    @property
+    def stream(self):
+        """The framed stream — the key for PerformanceMonitor.metrics_for."""
+        return self._stream
+
     def connect_to(self, host: str, port: int) -> None:
         self._socket.abort()  # drop any previous connection or attempt
         if self._performance is not None:
