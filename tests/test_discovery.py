@@ -127,3 +127,20 @@ def test_probe_send_failure_is_tolerated() -> None:
         broadcast_hosts=("256.256.256.256",),  # unroutable: sendto raises OSError
     )
     assert servers == []
+
+
+def test_probes_are_resent_so_a_late_responder_is_still_found() -> None:
+    # The responder starts mid-scan: only a re-sent probe can reach it. A
+    # single-probe scan (the old behavior) would find nothing here.
+    port = free_udp_port()
+    responder = DiscoveryResponder("latebox", 4242, discovery_port=port, bind_host=LOOPBACK)
+    timer = threading.Timer(0.5, responder.start)
+    timer.start()
+    try:
+        servers = discover_servers(
+            timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
+        )
+        assert servers == [ServerInfo(name="latebox", host=LOOPBACK, port=4242)]
+    finally:
+        timer.cancel()
+        responder.stop()

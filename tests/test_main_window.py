@@ -537,7 +537,7 @@ def test_caption_button_press_minimizes_without_native_tracking(qapp, tmp_path):
 
 def test_discovery_panel_lists_scan_results(qapp, monkeypatch):
     info = ServerInfo(name="box", host="10.0.0.7", port=1234)
-    monkeypatch.setattr(client_module, "discover_servers", lambda: [info])
+    monkeypatch.setattr(client_module, "discover_servers", lambda **_kwargs: [info])
     panel = DiscoveryPanel()
     found: list[list] = []
     activated: list[ServerInfo] = []
@@ -646,7 +646,7 @@ def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
 
 def test_refresh_action_triggers_a_scan(qapp, tmp_path, monkeypatch):
     scans = []
-    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    monkeypatch.setattr(client_module, "discover_servers", lambda **_kwargs: scans.append(True) or [])
     window = make_window(tmp_path)
     try:
         _menu_actions(window, "&View")["&Refresh server list"].trigger()
@@ -987,7 +987,7 @@ def test_discovery_panel_scans_only_at_startup(qapp, monkeypatch):
     import time
 
     scans = []
-    monkeypatch.setattr(client_module, "discover_servers", lambda: scans.append(True) or [])
+    monkeypatch.setattr(client_module, "discover_servers", lambda **_kwargs: scans.append(True) or [])
     panel = DiscoveryPanel(auto_scan=True)
     panel.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
     panel.show()
@@ -1085,8 +1085,8 @@ def test_server_only_instance_hides_client_ui(qapp, credentials, tmp_path):
         assert not window.refresh_action.isEnabled()
         assert not window.preferences_tab.viewer_checkbox.isChecked()
         # The role indicators say what this instance is.
-        assert "Client (viewer): off" in window.client_role_label.text()
-        assert "Server (sharing): on" in window.server_role_label.text()
+        assert "Client (viewer): off" in window.client_role_button.text()
+        assert "Server (sharing): on" in window.server_role_button.text()
     finally:
         window.close()
 
@@ -1096,7 +1096,7 @@ def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
     window = make_window(tmp_path)
     tabs = window.centralWidget()
     try:
-        assert "Client (viewer): on" in window.client_role_label.text()
+        assert "Client (viewer): on" in window.client_role_button.text()
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
         pump(qapp, lambda: window._sessions[0].connected)
 
@@ -1105,7 +1105,7 @@ def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
         assert "Server" not in [tabs.tabText(i) for i in range(tabs.count())]
         assert window.discovery_panel.isHidden()
         assert window._servers_group.isHidden()
-        assert "Client (viewer): off" in window.client_role_label.text()
+        assert "Client (viewer): off" in window.client_role_button.text()
         # With the role off, activation attempts are refused.
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
         assert window._sessions == []
@@ -1124,10 +1124,37 @@ def test_viewer_preference_toggles_client_ui_live(qapp, credentials, tmp_path):
 def test_role_indicators_follow_sharing(qapp, credentials, tmp_path):
     window = make_window(tmp_path, credentials)
     try:
-        assert "Server (sharing): off" in window.server_role_label.text()
+        assert "Server (sharing): off" in window.server_role_button.text()
         window.sharing_tab.set_mode("control")
-        assert "Server (sharing): on" in window.server_role_label.text()
+        assert "Server (sharing): on" in window.server_role_button.text()
         window.sharing_tab.set_mode("off")
-        assert "Server (sharing): off" in window.server_role_label.text()
+        assert "Server (sharing): off" in window.server_role_button.text()
+    finally:
+        window.close()
+
+
+def test_servers_dock_is_closable_but_not_floatable(qapp, tmp_path):
+    from PySide6.QtWidgets import QDockWidget
+
+    window = make_window(tmp_path)
+    try:
+        assert window.servers_dock.features() == QDockWidget.DockWidgetFeature.DockWidgetClosable
+    finally:
+        window.close()
+
+
+def test_role_indicators_are_inert_buttons(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        for button in (window.client_role_button, window.server_role_button):
+            assert button.isCheckable()
+            # Indicator only: mouse events pass through, clicks change nothing.
+            assert button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        assert window.client_role_button.isChecked()
+        assert window.server_role_button.isChecked()
+        window.sharing_tab.set_mode("off")
+        assert not window.server_role_button.isChecked()
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert not window.client_role_button.isChecked()
     finally:
         window.close()

@@ -113,34 +113,64 @@ class DiscoveryResponder:
                 _log.warning("Could not reply to probe from %s: %s", sender, error)
 
 
+# Probes are re-sent during the scan window: a single broadcast datagram is
+# easily lost (WiFi especially), and one lost probe must not turn a whole
+# scan into "no servers found".
+_PROBE_INTERVAL = 0.3
+
+
 def discover_servers(
     timeout: float = 1.0,
     *,
     discovery_port: int = DISCOVERY_PORT,
     broadcast_hosts: Sequence[str] = ("255.255.255.255",),
 ) -> list[ServerInfo]:
-    """Broadcast a probe and collect server replies until the timeout expires.
+    """Broadcast probes and collect server replies until the timeout expires.
 
-    Results are deduplicated by (host, port); order is arrival order.
+    The probe is repeated every `_PROBE_INTERVAL` seconds for the whole
+    window (responders answer each one; results are deduplicated by
+    (host, port), order is arrival order), so a dropped datagram only
+    delays discovery instead of defeating it.
     """
     found: dict[tuple[str, int], ServerInfo] = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.bind(("", 0))
+        if hasattr(socket, "SIO_UDP_CONNRESET"):  # Windows
+            # An ICMP port-unreachable for one of our probes would otherwise
+            # surface as ConnectionResetError on the next recvfrom and could
+            # abort the scan.
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         probe = _encode("probe")
-        for host in broadcast_hosts:
-            try:
-                sock.sendto(probe, (host, discovery_port))
-            except OSError as error:
-                # A failed broadcast means the scan quietly finds nothing —
-                # worth a record when diagnosing "no servers found".
-                _log.warning("Probe broadcast to %s:%d failed: %s", host, discovery_port, error)
+
+        def send_probes() -> None:
+            for host in broadcast_hosts:
+                try:
+                    sock.sendto(probe, (host, discovery_port))
+                except OSError as error:
+                    # A failed broadcast means the scan quietly finds
+                    # nothing — worth a record when diagnosing.
+                    _log.warning(
+                        "Probe broadcast to %s:%d failed: %s", host, discovery_port, error
+                    )
+
         deadline = time.monotonic() + timeout
+        next_probe = time.monotonic()  # first probes go out immediately
         while (remaining := deadline - time.monotonic()) > 0:
-            sock.settimeout(remaining)
+            now = time.monotonic()
+            if now >= next_probe:
+                send_probes()
+                next_probe = now + _PROBE_INTERVAL
+            sock.settimeout(max(0.01, min(remaining, next_probe - now)))
             try:
                 data, (host, _sender_port) = sock.recvfrom(_MAX_DATAGRAM)
-            except (TimeoutError, OSError):
+            except TimeoutError:
+                continue  # time for the next probe round (or the deadline)
+            except ConnectionResetError:
+                # Belt and braces with the ioctl above: one unreachable
+                # target must not end the whole scan.
+                continue
+            except OSError:
                 break
             message = _parse(data, "reply")
             if message is None:

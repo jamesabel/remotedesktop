@@ -219,13 +219,15 @@ class MainWindow(QMainWindow):
             auto_scan=auto_scan and self._viewer_enabled,
         )
         # The dock holds the role indicators (always) and the discovery
-        # panel (viewer role only).
-        self.client_role_label = QLabel()
-        self.server_role_label = QLabel()
+        # panel (viewer role only). The indicators are button-shaped for
+        # visibility but purely informational: mouse events pass straight
+        # through, and the roles are changed only in Preferences.
+        self.client_role_button = self._make_role_button()
+        self.server_role_button = self._make_role_button()
         dock_body = QWidget()
         dock_layout = QVBoxLayout(dock_body)
-        dock_layout.addWidget(self.client_role_label)
-        dock_layout.addWidget(self.server_role_label)
+        dock_layout.addWidget(self.client_role_button)
+        dock_layout.addWidget(self.server_role_button)
         dock_layout.addWidget(self.discovery_panel)
         if not self._viewer_enabled:
             self.discovery_panel.hide()
@@ -233,6 +235,9 @@ class MainWindow(QMainWindow):
         self.servers_dock = QDockWidget("Servers", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
+        # Closable (the X) but never floatable/movable: the panel lives on
+        # the left, and the View menu brings it back.
+        self.servers_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.servers_dock.setWidget(dock_body)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
 
@@ -389,17 +394,29 @@ class MainWindow(QMainWindow):
         self._tabs.insertTab(0, self._no_session_page, "Server")
         self._strip_tab_buttons(0)  # a fresh insert grows new close buttons
 
-    def _update_role_indicators(self) -> None:
-        def line(on: bool, role: str, state: str) -> str:
-            color = "#2e7d32" if on else "#9e9e9e"
-            return f'<span style="color:{color}">●</span> {role}: {state}'
+    @staticmethod
+    def _make_role_button() -> QPushButton:
+        button = QPushButton()
+        button.setCheckable(True)
+        button.setStyleSheet(
+            "QPushButton { padding: 4px 8px; }"
+            "QPushButton:checked { background-color: #2e7d32; color: white; "
+            "border: 1px solid #1b5e20; border-radius: 3px; }"
+        )
+        # Indicator only: clicks fall through, nothing toggles from here.
+        button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        return button
 
-        self.client_role_label.setText(
-            line(self._viewer_enabled, "Client (viewer)", "on" if self._viewer_enabled else "off")
+    def _update_role_indicators(self) -> None:
+        self.client_role_button.setChecked(self._viewer_enabled)
+        self.client_role_button.setText(
+            "Client (viewer): " + ("on" if self._viewer_enabled else "off")
         )
         serving = self.sharing_tab.serving
-        self.server_role_label.setText(
-            line(serving, "Server (sharing)", "on" if serving else "off")
+        self.server_role_button.setChecked(serving)
+        self.server_role_button.setText(
+            "Server (sharing): " + ("on" if serving else "off")
         )
 
     def _set_viewer_enabled(self, enabled: bool) -> None:

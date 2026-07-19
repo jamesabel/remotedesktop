@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPainter
+from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
@@ -27,6 +28,28 @@ from remotedesktop.sharing import ShareClient
 from remotedesktop.viewer import ViewerWidget
 
 _log = logging.getLogger("remotedesktop.client")
+
+
+def _broadcast_hosts() -> tuple[str, ...]:
+    """The limited broadcast plus every interface's directed broadcast.
+
+    Windows routes 255.255.255.255 out only one interface; on a machine
+    with a VPN or virtual adapters that can be the wrong one, making every
+    scan come up empty. Directed subnet broadcasts (e.g. 192.168.1.255)
+    reach each attached network explicitly.
+    """
+    hosts = {"255.255.255.255"}
+    for interface in QNetworkInterface.allInterfaces():
+        flags = interface.flags()
+        if not (flags & QNetworkInterface.InterfaceFlag.IsUp) or (
+            flags & QNetworkInterface.InterfaceFlag.IsLoopBack
+        ):
+            continue
+        for entry in interface.addressEntries():
+            broadcast = entry.broadcast()
+            if not broadcast.isNull() and broadcast.toString():
+                hosts.add(broadcast.toString())
+    return tuple(sorted(hosts))
 
 
 class _ServerList(QListWidget):
@@ -112,7 +135,7 @@ class DiscoveryPanel(QWidget):
         # thread. Any failure must still emit, or the button stays disabled.
         servers: list[ServerInfo] = []
         try:
-            servers = discover_servers()
+            servers = discover_servers(broadcast_hosts=_broadcast_hosts())
         except Exception:
             pass
         self._scanFinished.emit(servers)
