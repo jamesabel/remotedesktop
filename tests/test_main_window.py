@@ -1187,3 +1187,32 @@ def test_dock_keeps_indicators_at_the_top_in_both_roles(qapp, credentials, tmp_p
         assert window._dock_layout.stretch(3) == 0
     finally:
         window.close()
+
+
+def test_performance_subtabs_follow_the_roles(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials)  # viewer on, sharing off
+    pages = window.performance_pages
+
+    def titles():
+        return [pages.tabText(i) for i in range(pages.count())]
+
+    try:
+        assert titles() == ["Viewing"]  # no sharing data to show yet
+        window.sharing_tab.set_mode("control")
+        assert titles() == ["Viewing", "Sharing"]
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert titles() == ["Sharing"]
+        window.sharing_tab.set_mode("off")
+        assert titles() == []
+        # Both roles off: the pages hide and a hint explains why.
+        assert pages.isHidden()
+        assert not window._performance_hint.isHidden()
+        window.preferences_tab.viewer_checkbox.setChecked(True)
+        assert titles() == ["Viewing"]
+        assert not pages.isHidden()
+        assert window._performance_hint.isHidden()
+        # Re-enabling sharing puts Sharing back after Viewing.
+        window.sharing_tab.set_mode("view")
+        assert titles() == ["Viewing", "Sharing"]
+    finally:
+        window.close()

@@ -196,18 +196,29 @@ class MainWindow(QMainWindow):
         if not self._viewer_enabled:
             self._servers_group.hide()
         self._tabs.addTab(connections_tab, "Connections")
+        # The Performance sub-tabs follow the roles: "Viewing" exists only
+        # with the viewer role, "Sharing" only while actually serving —
+        # a role that produces no data gets no sub-tab. The pages are kept
+        # as attributes so _update_performance_tabs can re-insert them.
         self.performance_pages = QTabWidget()
-        self.performance_pages.addTab(
-            PerformanceTab(self.client_performance, local="client", remote="server"),
-            "Viewing",
+        self._viewing_perf_page = PerformanceTab(
+            self.client_performance, local="client", remote="server"
         )
-        self.performance_pages.addTab(
-            PerformanceTab(self.server_performance, local="server", remote="client"),
-            "Sharing",
+        self._sharing_perf_page = PerformanceTab(
+            self.server_performance, local="server", remote="client"
         )
+        self._performance_hint = QLabel(
+            "Nothing to measure — enable the Viewer role or Screen sharing "
+            "in the Preferences tab"
+        )
+        self._performance_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._performance_hint.hide()
         performance_tab = QWidget()
         performance_layout = QVBoxLayout(performance_tab)
-        performance_layout.addWidget(self.performance_pages)
+        performance_layout.addWidget(self.performance_pages, 1)
+        performance_layout.addWidget(
+            self._performance_hint, 1, Qt.AlignmentFlag.AlignCenter
+        )
         self._tabs.addTab(performance_tab, "Performance")
         self.setCentralWidget(self._tabs)
 
@@ -297,6 +308,7 @@ class MainWindow(QMainWindow):
         self.sharing_tab.restore_sharing()
         self._restore_sessions()
         self._update_role_indicators()
+        self._update_performance_tabs()
 
     # ------------------------------------------------------------- logging
 
@@ -413,6 +425,23 @@ class MainWindow(QMainWindow):
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
 
+    def _update_performance_tabs(self) -> None:
+        """Show a Performance sub-tab per role that can produce data."""
+        pages = self.performance_pages
+
+        def sync(page: QWidget, title: str, wanted: bool, front: bool) -> None:
+            index = pages.indexOf(page)
+            if wanted and index == -1:
+                pages.insertTab(0 if front else pages.count(), page, title)
+            elif not wanted and index != -1:
+                pages.removeTab(index)
+
+        sync(self._viewing_perf_page, "Viewing", self._viewer_enabled, front=True)
+        sync(self._sharing_perf_page, "Sharing", self.sharing_tab.serving, front=False)
+        empty = pages.count() == 0
+        pages.setVisible(not empty)
+        self._performance_hint.setVisible(empty)
+
     def _update_dock_layout(self) -> None:
         """Give the dock's leftover height to the panel or the spacer."""
         panel_visible = self._viewer_enabled
@@ -451,6 +480,7 @@ class MainWindow(QMainWindow):
         self.refresh_action.setEnabled(enabled)
         self._update_dock_layout()
         self._update_role_indicators()
+        self._update_performance_tabs()
 
     def _on_current_tab_changed(self, _index: int) -> None:
         self._refresh_status_bar()
@@ -604,6 +634,7 @@ class MainWindow(QMainWindow):
             self._tray = None
         self._update_window_title()
         self._update_role_indicators()
+        self._update_performance_tabs()
 
     def _quit(self) -> None:
         self._quitting = True
