@@ -250,7 +250,9 @@ class MainWindow(QMainWindow):
         if not self._viewer_enabled:
             self.discovery_panel.hide()
         self._update_dock_layout()
-        self.servers_dock = QDockWidget("Servers on LAN", self)
+        # No title text: the indicators and server list are self-explanatory.
+        # (The View menu still names it "Servers on LAN panel" for reopening.)
+        self.servers_dock = QDockWidget("", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
         # Closable (the X) but never floatable/movable: the panel lives on
@@ -382,7 +384,7 @@ class MainWindow(QMainWindow):
         label = QLabel(
             "<h3>No server connected</h3>"
             "<p>Computers sharing their screen appear automatically in the "
-            "<b>Servers on LAN</b> panel on the left<br>"
+            "panel on the left<br>"
             "(View&nbsp;▸&nbsp;Servers on LAN panel if it is hidden).</p>"
             "<p>Double-click one — or select it and click <b>Connect</b> — "
             "and this tab becomes your view of that computer.</p>"
