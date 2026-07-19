@@ -557,7 +557,7 @@ wheels = [
 
 [[package]]
 name = "pyship"
-version = "0.7.4"
+version = "0.7.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -577,7 +577,7 @@ dependencies = [
     { name = "wheel-inspect" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/23/c5e21fb5a2f3c5071f2adfdb2b9f69ebc55fc1227cfbc6338b09f443b4e8/pyship-0.7.4-py3-none-any.whl", hash = "sha256:b479d17bc87223adbee3624619f44843d34ae55e3c2dbaf285d67e8a92a81124", size = 66282, upload-time = "2026-07-19T17:49:36.674Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/4d/195e7e4a44134e7cad54f35e995ad8cf9f2dd75ca0d221e0bcb2705cd73c/pyship-0.7.5-py3-none-any.whl", hash = "sha256:539db5c9c6aa2cb83dd935f98b7eacd883cad6519a50a4066a872f76318add65", size = 66792, upload-time = "2026-07-19T22:30:31.336Z" },
 ]
 
 [[package]]
