@@ -8,9 +8,9 @@
 
 **Lossless, low-latency remote desktop for Windows computers on your LAN — one app, pure Python, zero configuration.**
 
-Run the same app on every computer. Turn on *Screen sharing* (view only or
+Run the same app on every computer. Turn on *Server (sharing)* (view only or
 full control) in Preferences on the ones you want to reach, and they appear
-automatically in every other instance's *Servers* panel: the first
+automatically in every other instance's *Servers on LAN* panel: the first
 connection is approved with one click on the shared computer, and from then
 on it reconnects instantly. View several computers at once — each in its own tab — while
 optionally sharing your own screen at the same time; closing the window
@@ -46,7 +46,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 
 ## Features
 
-- 🧩 **One app, either or both roles** — every install can view other computers and share its own screen at the same time. Both roles are chosen in Preferences: *Screen sharing* is a three-state choice (*Not shared* / *view only* / *full control*), and a *Viewer* toggle turns the client side off entirely for dedicated servers — the UI shows only the components for the roles you enabled, with indicators in the left pane saying what this instance is. Only one instance runs per computer (launching it again just raises the existing window).
+- 🧩 **One app, either or both roles** — every install can view other computers and share its own screen at the same time. Both roles are chosen in Preferences: *Server (sharing)* is a three-state choice (*Not shared* / *view only* / *full control*), and a *Client (viewer)* toggle turns the client side off entirely for dedicated servers — the UI shows only the components for the roles you enabled, with indicators in the left pane saying what this instance is. Only one instance runs per computer (launching it again just raises the existing window).
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN at startup, no addresses to type (press *Refresh* or F5 to rescan).
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
@@ -83,7 +83,7 @@ it prepares the environment on first use and launches the app.
 ## Quick start
 
 1. Run `remotedesktop` on both computers.
-2. On the computer to share, open *Preferences* and set *Screen sharing*
+2. On the computer to share, open *Preferences* and set *Server (sharing)*
    to one of the *Shared* modes.
 3. On the viewing computer, the shared computer appears in the *Servers*
    panel — double-click it.

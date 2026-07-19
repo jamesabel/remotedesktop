@@ -94,9 +94,17 @@ class PreferencesTab(QWidget):
         self.clipboard_checkbox.setChecked(load_clipboard_sync_enabled(settings))
         self.clipboard_checkbox.toggled.connect(self._on_clipboard_toggled)
         # The three-state sharing choice: off, view-only, or full control.
-        self.sharing_off_radio = QRadioButton("Not shared")
-        self.sharing_view_radio = QRadioButton("Shared — viewers can watch only")
-        self.sharing_control_radio = QRadioButton("Shared — viewers can watch and control")
+        self.sharing_off_radio = QRadioButton(
+            "Not shared — no one can see this computer's screen"
+        )
+        self.sharing_view_radio = QRadioButton(
+            "Shared, view only — clients can watch this computer's screen "
+            "but not control it"
+        )
+        self.sharing_control_radio = QRadioButton(
+            "Shared, full control — clients can watch this computer's screen "
+            "and control it with their keyboard and mouse"
+        )
         self._mode_radios = {
             SHARING_MODE_OFF: self.sharing_off_radio,
             SHARING_MODE_VIEW: self.sharing_view_radio,
@@ -118,12 +126,15 @@ class PreferencesTab(QWidget):
             "clicked from a remote desktop session, so an update doesn't "
             "require visiting this computer."
         )
-        self.viewer_checkbox = QCheckBox("Connect to and view other computers")
+        self.viewer_checkbox = QCheckBox(
+            "Act as a client — discover servers on this LAN and view or "
+            "control their screens"
+        )
         self.viewer_checkbox.setChecked(load_viewer_enabled(settings))
         self.viewer_checkbox.toggled.connect(self._on_viewer_toggled)
         layout = QFormLayout(self)
-        layout.addRow("Viewer", self.viewer_checkbox)
-        layout.addRow("Screen sharing", sharing_box)
+        layout.addRow("Client (viewer)", self.viewer_checkbox)
+        layout.addRow("Server (sharing)", sharing_box)
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
         layout.addRow(self.autostart_checkbox)
@@ -146,9 +157,9 @@ class PreferencesTab(QWidget):
     def _on_viewer_toggled(self, checked: bool) -> None:
         self._settings.set(VIEWER_KEY, "1" if checked else "0")
         self.statusMessage.emit(
-            "Viewer role enabled — this computer can connect to others"
+            "Client (viewer) role enabled — this computer can connect to servers"
             if checked
-            else "Viewer role disabled — this computer only serves"
+            else "Client (viewer) role disabled — this computer only serves"
         )
         self.viewerModeChanged.emit(checked)
 

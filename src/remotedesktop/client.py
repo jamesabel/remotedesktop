@@ -56,7 +56,7 @@ class _ServerList(QListWidget):
     """Server list that paints a hint while empty."""
 
     placeholder_text = (
-        "No servers found yet — turn on Screen sharing in the Preferences "
+        "No servers found yet — enable Server (sharing) in the Preferences "
         "tab on the computer to share"
     )
 
