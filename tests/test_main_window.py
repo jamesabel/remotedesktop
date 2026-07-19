@@ -1158,3 +1158,32 @@ def test_role_indicators_are_inert_buttons(qapp, credentials, tmp_path):
         assert not window.client_role_button.isChecked()
     finally:
         window.close()
+
+
+def test_dock_keeps_indicators_at_the_top_in_both_roles(qapp, credentials, tmp_path):
+    # Layout indexes: 0/1 = indicator buttons, 2 = discovery panel, 3 = spacer.
+    window = make_window(tmp_path, credentials, serving=True, viewer=False)
+    try:
+        assert window._dock_layout.stretch(2) == 0  # hidden panel
+        assert window._dock_layout.stretch(3) == 1  # spacer pins buttons up
+        window.show()
+        qapp.processEvents()
+        # The two indicators sit adjacent at the top, not spread apart.
+        gap = window.server_role_button.y() - window.client_role_button.geometry().bottom()
+        assert gap < 20
+    finally:
+        window.close()
+
+    window = make_window(tmp_path, credentials, db_name="viewer.db")
+    try:
+        assert window._dock_layout.stretch(2) == 1  # panel takes the height
+        assert window._dock_layout.stretch(3) == 0
+        # Live toggle off: the spacer takes over immediately (this was the
+        # spaced-out bug — the spacer only existed for non-viewer startup).
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert window._dock_layout.stretch(3) == 1
+        window.preferences_tab.viewer_checkbox.setChecked(True)
+        assert window._dock_layout.stretch(2) == 1
+        assert window._dock_layout.stretch(3) == 0
+    finally:
+        window.close()

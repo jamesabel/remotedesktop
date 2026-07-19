@@ -225,13 +225,18 @@ class MainWindow(QMainWindow):
         self.client_role_button = self._make_role_button()
         self.server_role_button = self._make_role_button()
         dock_body = QWidget()
-        dock_layout = QVBoxLayout(dock_body)
-        dock_layout.addWidget(self.client_role_button)
-        dock_layout.addWidget(self.server_role_button)
-        dock_layout.addWidget(self.discovery_panel)
+        self._dock_layout = QVBoxLayout(dock_body)
+        self._dock_layout.addWidget(self.client_role_button)
+        self._dock_layout.addWidget(self.server_role_button)
+        self._dock_layout.addWidget(self.discovery_panel)
+        # A permanent trailing spacer: it takes the leftover height while
+        # the discovery panel is hidden (keeping the indicators pinned to
+        # the top), and collapses to nothing while the panel is visible
+        # (the stretch factors swap in _update_dock_layout).
+        self._dock_layout.addStretch(0)
         if not self._viewer_enabled:
             self.discovery_panel.hide()
-            dock_layout.addStretch(1)
+        self._update_dock_layout()
         self.servers_dock = QDockWidget("Servers", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
@@ -408,6 +413,12 @@ class MainWindow(QMainWindow):
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
 
+    def _update_dock_layout(self) -> None:
+        """Give the dock's leftover height to the panel or the spacer."""
+        panel_visible = self._viewer_enabled
+        self._dock_layout.setStretch(2, 1 if panel_visible else 0)  # panel
+        self._dock_layout.setStretch(3, 0 if panel_visible else 1)  # spacer
+
     def _update_role_indicators(self) -> None:
         self.client_role_button.setChecked(self._viewer_enabled)
         self.client_role_button.setText(
@@ -438,6 +449,7 @@ class MainWindow(QMainWindow):
             if self._auto_scan:
                 self.discovery_panel.refresh()  # becoming a viewer: scan now
         self.refresh_action.setEnabled(enabled)
+        self._update_dock_layout()
         self._update_role_indicators()
 
     def _on_current_tab_changed(self, _index: int) -> None:
