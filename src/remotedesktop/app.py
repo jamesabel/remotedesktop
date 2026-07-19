@@ -250,14 +250,16 @@ class MainWindow(QMainWindow):
         if not self._viewer_enabled:
             self.discovery_panel.hide()
         self._update_dock_layout()
-        # No title text: the indicators and server list are self-explanatory.
-        # (The View menu still names it "Servers on LAN panel" for reopening.)
+        # No title bar at all: the contents are self-explanatory, and the
+        # View menu ("Panel") is the way to show or hide it — a blank header
+        # strip whose only job was the X earned no space. The Closable
+        # feature must stay even though there is no X: without it Qt
+        # disables the toggleViewAction, killing the View-menu toggle.
         self.servers_dock = QDockWidget("", self)
         # An object name is required for saveState() to persist the dock.
         self.servers_dock.setObjectName("servers_dock")
-        # Closable (the X) but never floatable/movable: the panel lives on
-        # the left, and the View menu brings it back.
         self.servers_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.servers_dock.setTitleBarWidget(QWidget(self.servers_dock))
         self.servers_dock.setWidget(dock_body)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.servers_dock)
 
@@ -343,7 +345,7 @@ class MainWindow(QMainWindow):
         self._view_menu = bar.addMenu("&View")
         # The dock's own toggle action: the way back after closing the panel.
         self.servers_panel_action = self.servers_dock.toggleViewAction()
-        self.servers_panel_action.setText("&Servers on LAN panel")
+        self.servers_panel_action.setText("&Panel")
         self._view_menu.addAction(self.servers_panel_action)
         self.refresh_action = self._view_menu.addAction("&Refresh server list")
         self.refresh_action.setShortcut(QKeySequence("F5"))
@@ -385,7 +387,7 @@ class MainWindow(QMainWindow):
             "<h3>No server connected</h3>"
             "<p>Computers sharing their screen appear automatically in the "
             "panel on the left<br>"
-            "(View&nbsp;▸&nbsp;Servers on LAN panel if it is hidden).</p>"
+            "(View&nbsp;▸&nbsp;Panel if it is hidden).</p>"
             "<p>Double-click one — or select it and click <b>Connect</b> — "
             "and this tab becomes your view of that computer.</p>"
             "<p>To make a computer appear in the list, enable "
