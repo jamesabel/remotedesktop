@@ -133,6 +133,16 @@ class ViewersTable(QTableWidget):
             return f"{version} ⚠"
         return version
 
+    def _identity_values(self, viewer: dict) -> list[str]:
+        """The non-metric cells for one peer (subclasses reshape these)."""
+        return [
+            viewer["name"] or "(unknown)",
+            viewer["address"],
+            viewer["user"] or "—",
+            viewer["os"] or "—",
+            self._version_cell(viewer["app_version"]),
+        ]
+
     def refresh(self) -> None:
         viewers = self._share_server.viewers() if self._share_server is not None else []
         self.setRowCount(len(viewers))
@@ -140,12 +150,7 @@ class ViewersTable(QTableWidget):
             metrics = self._performance.metrics_for(viewer["stream"])
             send, recv, rtt = metrics["send_bps"], metrics["recv_bps"], metrics["rtt_ms"]
             stats = metrics["rtt_stats"] or {}
-            values = [
-                viewer["name"] or "(unknown)",
-                viewer["address"],
-                viewer["user"] or "—",
-                viewer["os"] or "—",
-                self._version_cell(viewer["app_version"]),
+            values = self._identity_values(viewer) + [
                 format_rate(send) if send is not None else "—",
                 format_rate(recv) if recv is not None else "—",
                 format_ms(rtt) if rtt is not None else "—",

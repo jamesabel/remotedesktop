@@ -106,10 +106,16 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         groups = [g.title() for g in connections_tab.findChildren(QGroupBox)]
         assert groups == [
             "Server (sharing this computer)",
-            "Connection log",
-            "Server history",
             "Client history",
+            "Client (connected servers)",
+            "Server history",
+            "Connection log",
         ]
+        # Role-driven: sharing is off, so the server-side pair is hidden and
+        # the client-side pair (plus the log) shows.
+        assert window._sharing_group.isHidden() and window._clients_group.isHidden()
+        assert not window._sessions_group.isHidden()
+        assert not window._servers_group.isHidden()
         assert window._sessions == []  # server tabs appear only on connection
         assert not window.sharing_tab.serving
         # Idle: neither role schedules periodic work.
@@ -621,19 +627,19 @@ def test_close_tab_action_closes_only_session_tabs(qapp, credentials, tmp_path):
         server.close()
 
 
-def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
+def test_panel_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
     window = make_window(tmp_path)
     try:
         window.show()
-        assert window.servers_dock.isVisible()
+        assert window.panel_dock.isVisible()
         # Headerless dock: there is no X, so View ▸ Panel is the user's way
         # to hide and reopen it (the action must stay enabled).
         panel_action = _menu_actions(window, "&View")["&Panel"]
         assert panel_action.isEnabled()
         panel_action.trigger()  # hide
-        assert not window.servers_dock.isVisible()
+        assert not window.panel_dock.isVisible()
         panel_action.trigger()  # and back
-        assert window.servers_dock.isVisible()
+        assert window.panel_dock.isVisible()
         # Hide it again; the layout persists to the next start (same DB).
         panel_action.trigger()
     finally:
@@ -642,7 +648,7 @@ def test_servers_dock_can_be_reopened_and_layout_persists(qapp, tmp_path):
     reopened = make_window(tmp_path)
     try:
         reopened.show()
-        assert not reopened.servers_dock.isVisible()
+        assert not reopened.panel_dock.isVisible()
     finally:
         reopened.close()
 
@@ -705,7 +711,7 @@ def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
         window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
         session = window._sessions[0]
         pump(qapp, lambda: session.connected)
-        window.servers_panel_action.trigger()  # user had hidden the panel beforehand
+        window.panel_action.trigger()  # user had hidden the panel beforehand
 
         assert window.fullscreen_action.isEnabled()
         window.fullscreen_action.trigger()
@@ -713,7 +719,7 @@ def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
         assert not window.menuBar().isVisible()
         assert not window.statusBar().isVisible()
         assert not window.centralWidget().tabBar().isVisible()
-        assert not window.servers_dock.isVisible()
+        assert not window.panel_dock.isVisible()
 
         window.fullscreen_action.trigger()
         assert not window.isFullScreen()
@@ -721,7 +727,7 @@ def test_fullscreen_strips_and_restores_chrome(qapp, credentials, tmp_path):
         assert window.statusBar().isVisible()
         assert window.centralWidget().tabBar().isVisible()
         # The dock the user closed before fullscreen stays closed.
-        assert not window.servers_dock.isVisible()
+        assert not window.panel_dock.isVisible()
     finally:
         window.close()
         server.close()
@@ -1136,13 +1142,13 @@ def test_role_indicators_follow_sharing(qapp, credentials, tmp_path):
         window.close()
 
 
-def test_servers_dock_is_closable_but_not_floatable(qapp, tmp_path):
+def test_panel_dock_is_closable_but_not_floatable(qapp, tmp_path):
     from PySide6.QtWidgets import QDockWidget
 
     window = make_window(tmp_path)
     try:
-        assert window.servers_dock.features() == QDockWidget.DockWidgetFeature.DockWidgetClosable
-        assert window.servers_dock.titleBarWidget() is not None  # headerless
+        assert window.panel_dock.features() == QDockWidget.DockWidgetFeature.DockWidgetClosable
+        assert window.panel_dock.titleBarWidget() is not None  # headerless
     finally:
         window.close()
 
@@ -1218,5 +1224,58 @@ def test_performance_subtabs_follow_the_roles(qapp, credentials, tmp_path):
         # Re-enabling sharing puts the server sub-tab back after the client's.
         window.sharing_tab.set_mode("view")
         assert titles() == ["Client (viewer)", "Server (sharing)"]
+    finally:
+        window.close()
+
+
+def test_connected_servers_table_mirrors_sessions_with_stats(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        assert window.sessions_table.rowCount() == 0
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        pump(qapp, lambda: window.sessions_table.rowCount() == 1)
+        row = []
+        for column in range(len(window.sessions_table._COLUMNS)):
+            item = window.sessions_table.item(0, column)
+            assert item is not None
+            row.append(item.text())
+        name, address, version = row[:3]
+        assert name == session.name
+        assert address == session.key
+        from remotedesktop import __version__
+
+        assert version == __version__
+        # Metric cells exist (dashes until the monitor ticks).
+        assert all(row[3:])
+
+        server.close()
+        pump(qapp, lambda: not session.connected)
+        pump(qapp, lambda: window.sessions_table.rowCount() == 0)
+    finally:
+        window.close()
+        server.close()
+
+
+def test_connections_groups_follow_both_roles(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials)
+    try:
+        # Viewer on, sharing off.
+        assert window._sharing_group.isHidden() and window._clients_group.isHidden()
+        assert not window._sessions_group.isHidden()
+
+        window.sharing_tab.set_mode("control")
+        assert not window._sharing_group.isHidden()
+        assert not window._clients_group.isHidden()
+
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert window._sessions_group.isHidden()
+        assert window._servers_group.isHidden()
+        assert not window._sharing_group.isHidden()  # server side remains
+
+        window.sharing_tab.set_mode("off")
+        assert window._sharing_group.isHidden()  # nothing left but the log
     finally:
         window.close()
