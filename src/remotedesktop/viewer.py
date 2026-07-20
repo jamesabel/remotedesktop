@@ -9,16 +9,23 @@ forwarded.
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
+    QColor,
     QFocusEvent,
     QImage,
     QKeyEvent,
     QMouseEvent,
     QPaintEvent,
     QPainter,
+    QPalette,
     QPixmap,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
+
+# Frame-outline shades: light gray on a dark theme, dark gray on a light one,
+# so the border contrasts with the app background on either side of the edge.
+_BORDER_ON_DARK = QColor(170, 170, 170)
+_BORDER_ON_LIGHT = QColor(110, 110, 110)
 
 _BUTTON_NAMES = {
     Qt.MouseButton.LeftButton: "left",
@@ -257,3 +264,12 @@ class ViewerWidget(QWidget):
                 )
             self._scaled.setDevicePixelRatio(dpr)
         painter.drawPixmap(rect.topLeft(), self._scaled)
+        # Thin outline marking where the remote screen ends and the app
+        # background begins (they can otherwise blend together).
+        painter.setPen(self._border_color())
+        painter.drawRect(rect.adjusted(0, 0, -1, -1))
+
+    def _border_color(self) -> QColor:
+        """Outline shade for the current theme (follows the window background)."""
+        window = self.palette().color(QPalette.ColorRole.Window)
+        return _BORDER_ON_DARK if window.lightness() < 128 else _BORDER_ON_LIGHT
