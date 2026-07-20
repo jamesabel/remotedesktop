@@ -49,9 +49,9 @@ ALLOW_INPUT_KEY = "allow_remote_input"
 
 
 def load_sharing_mode(settings: Settings) -> str:
-    if settings.get("server_enabled") != "1":
+    if not settings.get_bool("server_enabled", False):
         return SHARING_MODE_OFF
-    if settings.get(ALLOW_INPUT_KEY, "1") != "0":
+    if settings.get_bool(ALLOW_INPUT_KEY, True):
         return SHARING_MODE_CONTROL
     return SHARING_MODE_VIEW
 
@@ -249,10 +249,10 @@ class SharingTab(QWidget):
             if self.share_server is not None:
                 self.stop_sharing()
             else:
-                self._settings.set("server_enabled", "0")
+                self._settings.set_bool("server_enabled", False)
             return
         allowed = mode == SHARING_MODE_CONTROL
-        self._settings.set(ALLOW_INPUT_KEY, "1" if allowed else "0")
+        self._settings.set_bool(ALLOW_INPUT_KEY, allowed)
         if self.share_server is not None:
             self.share_server.set_input_allowed(allowed)  # emits its status line
             return
@@ -278,7 +278,7 @@ class SharingTab(QWidget):
             cursor_probe=current_cursor_shape,
             performance=self._performance,
             log_provider=lambda: read_log_tail("remotedesktop"),
-            input_allowed=self._settings.get(ALLOW_INPUT_KEY, "1") != "0",
+            input_allowed=self._settings.get_bool(ALLOW_INPUT_KEY, True),
             parent=self,
         )
         server.status.connect(self.statusMessage)
@@ -307,13 +307,13 @@ class SharingTab(QWidget):
                     f'Discoverable as "{self._name}" '
                     f"(UDP port {self._discovery_port}, TCP port {server.port})"
                 )
-        self._settings.set("server_enabled", "1")
+        self._settings.set_bool("server_enabled", True)
         self._update_summary(0)
         self.sharingChanged.emit(self.serving)
 
     def stop_sharing(self) -> None:
         self._teardown()
-        self._settings.set("server_enabled", "0")
+        self._settings.set_bool("server_enabled", False)
         self._update_summary(0)
         self.sharingChanged.emit(False)
 

@@ -14,10 +14,12 @@ from remotedesktop.client import DiscoveryPanel
 from remotedesktop.config import PairedClients, Settings
 from remotedesktop.discovery import ServerInfo
 from remotedesktop.sharing import ShareServer
+from remotedesktop.visual_effects import VisualEffectsReducer
 
 from test_discovery import free_udp_port
 from test_sharing import pump
 from test_sharing_tab import stub_approval_prompt
+from test_visual_effects import FakeSpiBackend
 
 _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 
@@ -25,12 +27,16 @@ _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
 def make_window(
     tmp_path, credentials=None, *, serving=False, viewer=True, tray_available=False,
     db_name="app.db", discovery_port=None, reconnect_base_seconds=2.0,
+    effects_reducer=None,
 ):
     """A MainWindow on a temp DB with everything injected.
 
     auto_scan=False: window tests must never broadcast a discovery probe on
     the LAN. Serving instances always get injected credentials (never create
-    real cert files) and ephemeral ports.
+    real cert files) and ephemeral ports. The effects reducer always gets a
+    fake backend — the reduce-effects preference defaults ON, so a window
+    with a real reducer would change the host's actual Windows settings the
+    moment a test connects a viewer.
     """
     assert not serving or credentials is not None
     connection = db.connect(tmp_path / db_name)
@@ -47,6 +53,11 @@ def make_window(
         connect_port=0,
         tray_available=tray_available,
         reconnect_base_seconds=reconnect_base_seconds,
+        effects_reducer=(
+            effects_reducer
+            if effects_reducer is not None
+            else VisualEffectsReducer(FakeSpiBackend())
+        ),
     )
 
 
@@ -1288,5 +1299,48 @@ def test_connections_groups_follow_both_roles(qapp, credentials, tmp_path):
 
         window.sharing_tab.set_mode("off")
         assert window._server_role_group.isHidden()  # nothing left but the log
+    finally:
+        window.close()
+
+
+def test_visual_effects_reduced_while_viewers_connected(qapp, tmp_path):
+    backend = FakeSpiBackend(menu_delay=400)
+    window = make_window(
+        tmp_path, effects_reducer=VisualEffectsReducer(backend)
+    )
+    try:
+        # The preference defaults on.
+        assert window.preferences_tab.reduce_effects_checkbox.isChecked()
+        # First viewer: effects reduced. Driven by the signal rather than a
+        # real connection — the sharing pipeline has its own tests.
+        window.sharing_tab.viewerCountChanged.emit(1)
+        assert backend.min_animate is False
+        assert backend.menu_delay != 400
+        # Last viewer leaves: the user's exact values come back.
+        window.sharing_tab.viewerCountChanged.emit(0)
+        assert backend.min_animate is True
+        assert backend.menu_delay == 400
+    finally:
+        window.close()
+
+
+def test_visual_effects_preference_applies_live_and_persists(qapp, tmp_path):
+    from remotedesktop.preferences import load_reduce_effects_enabled
+
+    backend = FakeSpiBackend()
+    window = make_window(
+        tmp_path, effects_reducer=VisualEffectsReducer(backend)
+    )
+    try:
+        window.sharing_tab.viewerCountChanged.emit(2)
+        assert backend.min_animate is False
+        # Turning the preference off mid-session restores immediately, even
+        # with viewers still connected, and persists.
+        window.preferences_tab.reduce_effects_checkbox.setChecked(False)
+        assert backend.min_animate is True
+        assert not load_reduce_effects_enabled(window._settings)
+        # Turning it back on applies again because viewers are connected.
+        window.preferences_tab.reduce_effects_checkbox.setChecked(True)
+        assert backend.min_animate is False
     finally:
         window.close()

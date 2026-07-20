@@ -710,6 +710,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "pyside6" },
     { name = "semver" },
+    { name = "tobool" },
 ]
 
 [package.dev-dependencies]
@@ -728,6 +729,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.10.0" },
     { name = "pyside6", specifier = ">=6.11.1" },
     { name = "semver", specifier = ">=3.0" },
+    { name = "tobool", specifier = ">=0.4.0" },
 ]
 
 [package.metadata.requires-dev]
