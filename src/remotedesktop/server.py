@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from remotedesktop import __version__, compat, tls
 from remotedesktop.config import PairedClients, Settings, default_config_dir
+from remotedesktop.cursor_shape import current_cursor_shape
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
     DISCOVERY_PORT,
@@ -274,6 +275,7 @@ class SharingTab(QWidget):
             credentials=self._credentials,
             paired=self._paired,
             clipboard=self._clipboard,
+            cursor_probe=current_cursor_shape,
             performance=self._performance,
             log_provider=lambda: read_log_tail("remotedesktop"),
             input_allowed=self._settings.get(ALLOW_INPUT_KEY, "1") != "0",

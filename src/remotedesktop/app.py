@@ -1001,6 +1001,7 @@ class MainWindow(QMainWindow):
         client.denied.connect(lambda reason, s=session: self._on_denied(s, reason))
         client.disconnected.connect(lambda s=session: self._on_disconnected(s))
         client.frameReceived.connect(lambda image, s=session: self._on_frame(s, image))
+        client.cursorShapeChanged.connect(lambda shape, s=session: s.viewer.set_remote_cursor(shape))
         client.logReceived.connect(lambda text, s=session: self._show_server_log(s.name, text))
         client.connectionFailed.connect(lambda _reason, s=session: self._schedule_reconnect(s))
         self._sessions.append(session)
