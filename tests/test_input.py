@@ -238,6 +238,21 @@ def test_release_when_frame_vanished_mid_drag(qapp):
     assert [e["pressed"] for e in events] == [True]
 
 
+def test_viewer_mirrors_remote_cursor_shape(qapp):
+    viewer = ViewerWidget()
+    viewer.set_remote_cursor("size_we")
+    assert viewer.cursor().shape() == Qt.CursorShape.SizeHorCursor
+    viewer.set_remote_cursor("hidden")
+    assert viewer.cursor().shape() == Qt.CursorShape.BlankCursor
+    # A name from a newer server's vocabulary falls back to the arrow.
+    viewer.set_remote_cursor("lasso")
+    assert viewer.cursor().shape() == Qt.CursorShape.ArrowCursor
+    # Disconnecting restores the normal local cursor.
+    viewer.set_remote_cursor("size_ns")
+    viewer.clear()
+    assert viewer.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+
 def test_viewer_paints_message_and_frame(qapp):
     viewer = ViewerWidget()
     viewer.resize(400, 400)

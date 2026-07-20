@@ -116,6 +116,7 @@ class ShareServer(QObject):
         fps: int = DEFAULT_FPS,
         injector: InputInjector | None = None,
         clipboard=None,
+        cursor_probe: Callable[[], str | None] | None = None,
         performance: PerformanceMonitor | None = None,
         log_provider: Callable[[], str] | None = None,
         input_allowed: bool = True,
@@ -132,6 +133,10 @@ class ShareServer(QObject):
         self._clipboard = clipboard
         if clipboard is not None:
             clipboard.changed.connect(self._broadcast_clipboard)
+        # Opt-in like clipboard: only the GUI passes a probe, so plain
+        # sharing tests never poll (or depend on) the host's real cursor.
+        self._cursor_probe = cursor_probe
+        self._cursor_shape: str | None = None  # last shape sent to viewers
         self._streams: list[MessageStream] = []
         self._all_streams: set[MessageStream] = set()
         self._controllers: set[MessageStream] = set()
@@ -237,6 +242,7 @@ class ShareServer(QObject):
         self._needs_keyframe.clear()
         self._viewer_info.clear()
         self._previous_frame = None
+        self._cursor_shape = None
         if self._dxgi is not None:
             self._dxgi.close()
             self._dxgi = None
@@ -468,6 +474,7 @@ class ShareServer(QObject):
         stream.send_json(welcome)
         self._needs_keyframe.add(stream)  # its first frame must be a full one
         self._streams.append(stream)
+        self._broadcast_cursor(new_stream=stream)  # start with the right cursor
         if self._performance is not None:
             self._performance.add_stream(stream)
         self.clientCountChanged.emit(len(self._streams))
@@ -637,9 +644,30 @@ class ShareServer(QObject):
             _log.info("DXGI capture unavailable — using grabWindow until it recovers")
         return image
 
+    def _broadcast_cursor(self, new_stream: MessageStream | None = None) -> None:
+        """Tell viewers what shape their local cursor should mirror: everyone
+        when the server's cursor changed shape, plus a just-admitted stream
+        that still needs the current shape.
+
+        The message is tiny and shape changes are rare next to frames, so it
+        is sent even to backlogged streams (like clipboard updates).
+        """
+        if self._cursor_probe is None:
+            return
+        shape = self._cursor_probe()
+        if shape is None:
+            return
+        if shape != self._cursor_shape:
+            self._cursor_shape = shape
+            for stream in self._streams:
+                stream.send_json({"type": "cursor", "shape": shape})
+        elif new_stream is not None:
+            new_stream.send_json({"type": "cursor", "shape": shape})
+
     def _broadcast_frame(self) -> None:
         if not self._streams:
             return
+        self._broadcast_cursor()  # polled at the frame rate, sent on change
         image = self._capture()
         if image is None:
             self.status.emit("Screen capture failed (null image)")
@@ -711,6 +739,10 @@ class ShareClient(QObject):
     # emits it only for sockets that actually reached ConnectedState.
     connectionFailed = Signal(str)
     frameReceived = Signal(QImage)
+    # The server's cursor changed shape (a cursor_shape.py name, e.g.
+    # "size_we"); the viewer mirrors it on the local cursor. Servers without
+    # the feature (pre-1.6) simply never emit it.
+    cursorShapeChanged = Signal(str)
     status = Signal(str)
     logReceived = Signal(str)  # server log text answering request_log
 
@@ -907,6 +939,10 @@ class ShareClient(QObject):
                 if self._clipboard is not None:
                     self.status.emit("Clipboard update received from server")
                     self._clipboard.apply(message)
+            case "cursor":
+                # Too frequent for the status log; unknown names are the
+                # viewer's problem (it falls back to the arrow).
+                self.cursorShapeChanged.emit(str(message.get("shape", "")) or "arrow")
             case "ping" | "pong":
                 if self._performance is not None:
                     self._performance.handle_message(self._stream, message)

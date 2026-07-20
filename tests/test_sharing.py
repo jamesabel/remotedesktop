@@ -23,7 +23,14 @@ def pump(qapp, condition, timeout=10.0):
 
 
 def make_server(
-    credentials, tmp_path, *, approve, injector=None, clipboard=None, log_provider=None
+    credentials,
+    tmp_path,
+    *,
+    approve,
+    injector=None,
+    clipboard=None,
+    cursor_probe=None,
+    log_provider=None,
 ):
     # The server is a distinct "machine" from the client -> its own database.
     server = ShareServer(
@@ -32,6 +39,7 @@ def make_server(
         paired=PairedClients(db.connect(tmp_path / "server.db")),
         injector=injector,
         clipboard=clipboard,
+        cursor_probe=cursor_probe,
         log_provider=log_provider,
     )
     assert server.listen(0)
@@ -94,6 +102,33 @@ def test_first_connection_prompts_pairs_and_streams(qapp, credentials, tmp_path)
             f"127.0.0.1:{server.port}"
         )
         assert record is not None and record["token"]
+    finally:
+        client.close()
+        server.close()
+
+
+def test_cursor_shape_sent_on_admission_and_on_change_only(qapp, credentials, tmp_path):
+    shape = ["size_we"]
+    server = make_server(
+        credentials, tmp_path, approve=lambda *_: True, cursor_probe=lambda: shape[0]
+    )
+    client = make_client(tmp_path)
+    shapes: list[str] = []
+    client.cursorShapeChanged.connect(shapes.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        # A just-admitted viewer gets the current shape without waiting for
+        # a change.
+        pump(qapp, lambda: shapes)
+        assert shapes == ["size_we"]
+        shape[0] = "ibeam"
+        pump(qapp, lambda: len(shapes) >= 2)
+        # Give the broadcast timer a few more ticks: the probe is polled at
+        # the frame rate but must send only on change, never per tick.
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            qapp.processEvents()
+        assert shapes == ["size_we", "ibeam"]
     finally:
         client.close()
         server.close()

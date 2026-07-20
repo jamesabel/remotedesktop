@@ -10,6 +10,7 @@ forwarded.
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFocusEvent,
     QImage,
     QKeyEvent,
@@ -31,6 +32,27 @@ _BUTTON_NAMES = {
     Qt.MouseButton.LeftButton: "left",
     Qt.MouseButton.RightButton: "right",
     Qt.MouseButton.MiddleButton: "middle",
+}
+
+# Wire cursor-shape names (cursor_shape.py on the server side) -> the local
+# cursor mirroring the remote one. Names this map doesn't know (a newer
+# server's vocabulary) fall back to the arrow.
+_CURSOR_SHAPES = {
+    "arrow": Qt.CursorShape.ArrowCursor,
+    "ibeam": Qt.CursorShape.IBeamCursor,
+    "wait": Qt.CursorShape.WaitCursor,
+    "cross": Qt.CursorShape.CrossCursor,
+    "uparrow": Qt.CursorShape.UpArrowCursor,
+    "size_nwse": Qt.CursorShape.SizeFDiagCursor,
+    "size_nesw": Qt.CursorShape.SizeBDiagCursor,
+    "size_we": Qt.CursorShape.SizeHorCursor,
+    "size_ns": Qt.CursorShape.SizeVerCursor,
+    "size_all": Qt.CursorShape.SizeAllCursor,
+    "no": Qt.CursorShape.ForbiddenCursor,
+    "hand": Qt.CursorShape.PointingHandCursor,
+    "appstarting": Qt.CursorShape.BusyCursor,
+    "help": Qt.CursorShape.WhatsThisCursor,
+    "hidden": Qt.CursorShape.BlankCursor,
 }
 
 
@@ -108,7 +130,13 @@ class ViewerWidget(QWidget):
         self._message = message
         self._pressed_buttons.clear()
         self._pressed_keys.clear()
+        self.unsetCursor()  # a disconnected viewer shows the normal cursor
         self.update()
+
+    def set_remote_cursor(self, shape: str) -> None:
+        """Mirror the server's cursor shape on the local cursor (the frame
+        itself never contains the pointer — screen capture excludes it)."""
+        self.setCursor(QCursor(_CURSOR_SHAPES.get(shape, Qt.CursorShape.ArrowCursor)))
 
     def _display_rect(self) -> QRectF:
         """Rectangle the frame occupies, centered and aspect-preserved."""
