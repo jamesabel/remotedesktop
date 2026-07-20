@@ -60,6 +60,19 @@ def make_share_server(credentials, tmp_path, *, approve=lambda *_: True, db_name
     return server
 
 
+def test_persisted_theme_is_applied_at_startup(qapp, tmp_path):
+    from remotedesktop.preferences import THEME_KEY, THEME_SYSTEM, apply_theme
+
+    Settings(db.connect(tmp_path / "app.db")).set(THEME_KEY, "dark")
+    window = make_window(tmp_path)
+    try:
+        assert qapp.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        assert window.preferences_tab.theme_dark_radio.isChecked()
+    finally:
+        window.close()
+        apply_theme(THEME_SYSTEM)  # don't leak a dark palette into other tests
+
+
 def test_get_server_log_button_needs_a_connection(qapp, tmp_path):
     window = make_window(tmp_path)
     try:

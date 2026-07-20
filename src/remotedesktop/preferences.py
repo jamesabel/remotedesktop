@@ -1,15 +1,18 @@
 """The Preferences tab: user-adjustable settings.
 
-Performance-history length and the clipboard-sync opt-out persist in
-`Settings` (the shared SQLite settings table, injectable in tests like every
-other store); the start-at-login option reads and writes the Windows Run
-registry key via `Autostart`. The clipboard toggle applies live to the
-shared `ClipboardSync` (the `clipboard=` opt-in collaborator pattern).
+Performance-history length, the clipboard-sync opt-out, and the theme choice
+persist in `Settings` (the shared SQLite settings table, injectable in tests
+like every other store); the start-at-login option reads and writes the
+Windows Run registry key via `Autostart`. The clipboard toggle applies live
+to the shared `ClipboardSync` (the `clipboard=` opt-in collaborator
+pattern). The theme radios (follow-OS / light / dark) apply live via
+`apply_theme`; `MainWindow` re-applies the persisted choice at startup.
 """
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -34,10 +37,35 @@ PERFORMANCE_WINDOW_KEY = "performance_window_seconds"
 DEFAULT_PERFORMANCE_WINDOW_SECONDS = 120
 CLIPBOARD_SYNC_KEY = "clipboard_sync_enabled"
 VIEWER_KEY = "viewer_enabled"
+THEME_KEY = "theme"
+THEME_SYSTEM = "system"  # follow the OS light/dark setting
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+_THEMES = (THEME_SYSTEM, THEME_LIGHT, THEME_DARK)
 
 
 def load_clipboard_sync_enabled(settings: Settings) -> bool:
     return settings.get(CLIPBOARD_SYNC_KEY, "1") != "0"
+
+
+def load_theme(settings: Settings) -> str:
+    value = settings.get(THEME_KEY, THEME_SYSTEM)
+    return value if value in _THEMES else THEME_SYSTEM
+
+
+def apply_theme(theme: str) -> None:
+    """Apply a theme app-wide; Qt's windows11 style restyles live.
+
+    THEME_SYSTEM unsets the override so the app follows the OS light/dark
+    setting again (including future OS-side switches).
+    """
+    hints = QGuiApplication.styleHints()
+    if theme == THEME_LIGHT:
+        hints.setColorScheme(Qt.ColorScheme.Light)
+    elif theme == THEME_DARK:
+        hints.setColorScheme(Qt.ColorScheme.Dark)
+    else:
+        hints.unsetColorScheme()
 
 
 def load_viewer_enabled(settings: Settings) -> bool:
@@ -120,6 +148,25 @@ class PreferencesTab(QWidget):
         sharing_layout.setContentsMargins(0, 0, 0, 0)
         for radio in self._mode_radios.values():
             sharing_layout.addWidget(radio)
+        # Theme: an explicit light/dark override, or follow the OS setting.
+        self.theme_system_radio = QRadioButton("Follow the Windows light/dark setting")
+        self.theme_light_radio = QRadioButton("Light")
+        self.theme_dark_radio = QRadioButton("Dark")
+        self._theme_radios = {
+            THEME_SYSTEM: self.theme_system_radio,
+            THEME_LIGHT: self.theme_light_radio,
+            THEME_DARK: self.theme_dark_radio,
+        }
+        self._theme_radios[load_theme(settings)].setChecked(True)
+        for theme, radio in self._theme_radios.items():
+            radio.toggled.connect(
+                lambda checked, t=theme: checked and self._on_theme_changed(t)
+            )
+        theme_box = QWidget()
+        theme_layout = QVBoxLayout(theme_box)
+        theme_layout.setContentsMargins(0, 0, 0, 0)
+        for radio in self._theme_radios.values():
+            theme_layout.addWidget(radio)
         self.restart_button = QPushButton("Restart app")
         self.restart_button.setToolTip(
             "Relaunch this app (e.g. after updating the software). It can be "
@@ -135,6 +182,7 @@ class PreferencesTab(QWidget):
         layout = QFormLayout(self)
         layout.addRow("Client (viewer)", self.viewer_checkbox)
         layout.addRow("Server (sharing)", sharing_box)
+        layout.addRow("Theme", theme_box)
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
         layout.addRow(self.autostart_checkbox)
@@ -162,6 +210,17 @@ class PreferencesTab(QWidget):
             else "Client (viewer) role disabled — this computer only serves"
         )
         self.viewerModeChanged.emit(checked)
+
+    def _on_theme_changed(self, theme: str) -> None:
+        self._settings.set(THEME_KEY, theme)
+        apply_theme(theme)
+        self.statusMessage.emit(
+            {
+                THEME_SYSTEM: "Theme follows the Windows light/dark setting",
+                THEME_LIGHT: "Theme set to light",
+                THEME_DARK: "Theme set to dark",
+            }[theme]
+        )
 
     def _on_clipboard_toggled(self, checked: bool) -> None:
         self._settings.set(CLIPBOARD_SYNC_KEY, "1" if checked else "0")
