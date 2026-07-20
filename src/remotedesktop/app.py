@@ -52,8 +52,10 @@ from remotedesktop.modal_loop import HTCLOSE, HTMAXBUTTON, HTMINBUTTON, ModalLoo
 from remotedesktop.performance import PerformanceMonitor, PerformanceTab
 from remotedesktop.preferences import (
     PreferencesTab,
+    apply_theme,
     load_clipboard_sync_enabled,
     load_performance_window_seconds,
+    load_theme,
     load_viewer_enabled,
 )
 from remotedesktop.server import SharingTab, ViewersTable
@@ -136,6 +138,9 @@ class MainWindow(QMainWindow):
         # The viewer (client) role is opt-out: a dedicated server turns it
         # off and loses the client-side UI (Server tab, discovery, history).
         self._viewer_enabled = load_viewer_enabled(self._settings)
+        # Restore the persisted theme before any widgets are built, so the
+        # window never flashes in the wrong scheme.
+        apply_theme(load_theme(self._settings))
         # One monitor per role: ShareServer.close() resets its monitor, so
         # toggling sharing must not share a monitor with the viewing sessions
         # (and vice versa for _connect_session's reset).

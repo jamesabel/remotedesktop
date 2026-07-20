@@ -92,6 +92,37 @@ def test_clipboard_toggle_persists_and_applies_live(qapp, tmp_path):
     assert not load_clipboard_sync_enabled(settings)
 
 
+def test_theme_defaults_and_invalid_fall_back(tmp_path):
+    from remotedesktop.preferences import THEME_KEY, THEME_SYSTEM, load_theme
+
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    assert load_theme(settings) == THEME_SYSTEM
+    settings.set(THEME_KEY, "sepia")
+    assert load_theme(settings) == THEME_SYSTEM
+
+
+def test_theme_radio_persists_and_applies_live(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+
+    from remotedesktop.preferences import THEME_KEY, THEME_SYSTEM, apply_theme
+
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    tab = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+    assert tab.theme_system_radio.isChecked()  # default: follow the OS
+    messages = []
+    tab.statusMessage.connect(messages.append)
+    try:
+        tab.theme_dark_radio.setChecked(True)
+        assert settings.get(THEME_KEY) == "dark"
+        assert qapp.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        assert any("dark" in m for m in messages)
+        # A fresh tab (restart) reads the persisted choice.
+        tab2 = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+        assert tab2.theme_dark_radio.isChecked()
+    finally:
+        apply_theme(THEME_SYSTEM)  # don't leak a dark palette into other tests
+
+
 def test_sharing_mode_radios_reflect_persisted_state_and_emit(qapp, tmp_path):
     settings = Settings(db.connect(tmp_path / "prefs.db"))
     settings.set("server_enabled", "1")
