@@ -117,6 +117,7 @@ class ShareServer(QObject):
         injector: InputInjector | None = None,
         clipboard=None,
         cursor_probe: Callable[[], str | None] | None = None,
+        lock_probe: Callable[[], bool | None] | None = None,
         performance: PerformanceMonitor | None = None,
         log_provider: Callable[[], str] | None = None,
         input_allowed: bool = True,
@@ -137,6 +138,13 @@ class ShareServer(QObject):
         # sharing tests never poll (or depend on) the host's real cursor.
         self._cursor_probe = cursor_probe
         self._cursor_shape: str | None = None  # last shape sent to viewers
+        # Opt-in for the same reason: only the GUI probes the real desktop.
+        # While the session is locked (secure desktop — see session_lock.py)
+        # the screen cannot be captured and injected input is discarded, so
+        # viewers are told and remote input is dropped here.
+        self._lock_probe = lock_probe
+        self._session_locked = False  # last state sent to viewers
+        self._lock_input_reported = False  # one status line per lock episode
         self._streams: list[MessageStream] = []
         self._all_streams: set[MessageStream] = set()
         self._controllers: set[MessageStream] = set()
@@ -243,6 +251,8 @@ class ShareServer(QObject):
         self._viewer_info.clear()
         self._previous_frame = None
         self._cursor_shape = None
+        self._session_locked = False
+        self._lock_input_reported = False
         if self._dxgi is not None:
             self._dxgi.close()
             self._dxgi = None
@@ -475,6 +485,7 @@ class ShareServer(QObject):
         self._needs_keyframe.add(stream)  # its first frame must be a full one
         self._streams.append(stream)
         self._broadcast_cursor(new_stream=stream)  # start with the right cursor
+        self._broadcast_lock(new_stream=stream)  # tell it if the session is locked
         if self._performance is not None:
             self._performance.add_stream(stream)
         self.clientCountChanged.emit(len(self._streams))
@@ -489,6 +500,13 @@ class ShareServer(QObject):
         if not self._input_allowed:
             # View-only: the toggle already produced a status line; per-event
             # noise goes nowhere (not even the debug log — it's every move).
+            return
+        if self._session_locked:
+            # The secure desktop discards injected input anyway; drop it here
+            # and say so once per lock episode (not per event — it's every move).
+            if not self._lock_input_reported:
+                self._lock_input_reported = True
+                self.status.emit("Ignoring remote input while the session is locked")
             return
         action = message.get("action")
         x, y = message.get("x"), message.get("y")
@@ -664,10 +682,40 @@ class ShareServer(QObject):
         elif new_stream is not None:
             new_stream.send_json({"type": "cursor", "shape": shape})
 
+    def _broadcast_lock(self, new_stream: MessageStream | None = None) -> None:
+        """Tell viewers when the session locks or unlocks (secure desktop —
+        see session_lock.py): the screen can no longer be captured and input
+        cannot be injected, so the client shows a notice instead of leaving
+        its user a silently frozen frame.
+
+        Sent on change to everyone, plus to a just-admitted stream while
+        locked (unlocked is every stream's starting assumption).
+        """
+        if self._lock_probe is None:
+            return
+        locked = self._lock_probe()
+        if locked is None:
+            return
+        if locked != self._session_locked:
+            self._session_locked = locked
+            if locked:
+                self.status.emit(
+                    "Session locked — the lock screen cannot be captured or "
+                    "controlled remotely; viewers are notified"
+                )
+            else:
+                self._lock_input_reported = False
+                self.status.emit("Session unlocked — resuming normal streaming")
+            for stream in self._streams:
+                stream.send_json({"type": "session_lock", "locked": locked})
+        elif new_stream is not None and locked:
+            new_stream.send_json({"type": "session_lock", "locked": True})
+
     def _broadcast_frame(self) -> None:
         if not self._streams:
             return
         self._broadcast_cursor()  # polled at the frame rate, sent on change
+        self._broadcast_lock()  # likewise
         image = self._capture()
         if image is None:
             self.status.emit("Screen capture failed (null image)")
@@ -743,6 +791,10 @@ class ShareClient(QObject):
     # "size_we"); the viewer mirrors it on the local cursor. Servers without
     # the feature (pre-1.6) simply never emit it.
     cursorShapeChanged = Signal(str)
+    # The server's session locked (True) or unlocked (False) — the secure
+    # desktop cannot be captured or controlled, so the viewer shows a notice.
+    # Servers without the feature (pre-1.8) simply never emit it.
+    sessionLockChanged = Signal(bool)
     status = Signal(str)
     logReceived = Signal(str)  # server log text answering request_log
 
@@ -943,6 +995,14 @@ class ShareClient(QObject):
                 # Too frequent for the status log; unknown names are the
                 # viewer's problem (it falls back to the arrow).
                 self.cursorShapeChanged.emit(str(message.get("shape", "")) or "arrow")
+            case "session_lock":
+                locked = bool(message.get("locked"))
+                self.status.emit(
+                    "Server session is locked — sign in at the server machine"
+                    if locked
+                    else "Server session unlocked"
+                )
+                self.sessionLockChanged.emit(locked)
             case "ping" | "pong":
                 if self._performance is not None:
                     self._performance.handle_message(self._stream, message)

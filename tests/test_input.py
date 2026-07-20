@@ -253,6 +253,62 @@ def test_viewer_mirrors_remote_cursor_shape(qapp):
     assert viewer.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
+def test_input_dropped_while_session_locked(qapp, credentials, tmp_path):
+    injector = RecordingInjector()
+    locked = [False]
+    server = make_server(
+        credentials,
+        tmp_path,
+        approve=lambda *_: True,
+        injector=injector,
+        lock_probe=lambda: locked[0],
+    )
+    statuses: list[str] = []
+    server.status.connect(statuses.append)
+    client = make_client(tmp_path)
+    lock_states: list[bool] = []
+    client.sessionLockChanged.connect(lock_states.append)
+    connected = []
+    client.connected.connect(connected.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: connected)
+        client.send_input({"action": "move", "x": 0.5, "y": 0.25})
+        pump(qapp, lambda: injector.calls)
+        locked[0] = True
+        # The lock notice reaching the client proves the server's own state
+        # flipped before the input below arrives.
+        pump(qapp, lambda: lock_states == [True])
+        injector.calls.clear()
+        client.send_input({"action": "move", "x": 0.1, "y": 0.1})
+        client.send_input({"action": "key", "vk": 65, "pressed": True})
+        pump(qapp, lambda: any("Ignoring remote input" in s for s in statuses))
+        assert injector.calls == []
+        locked[0] = False
+        pump(qapp, lambda: lock_states == [True, False])
+        client.send_input({"action": "move", "x": 0.9, "y": 0.9})
+        pump(qapp, lambda: injector.calls)  # unlocking resumes injection
+    finally:
+        client.close()
+        server.close()
+
+
+def test_viewer_session_lock_overlay(qapp):
+    viewer = ViewerWidget()
+    viewer.resize(400, 400)
+    assert not viewer.session_locked
+    image = QImage(200, 100, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.red)
+    viewer.show_frame(image)
+    viewer.set_session_locked(True)
+    assert viewer.session_locked
+    assert not viewer.grab().isNull()  # paints the dimmed-frame notice branch
+    viewer._frame = None
+    assert not viewer.grab().isNull()  # and the no-frame notice branch
+    viewer.clear()  # disconnecting clears the notice with the frame
+    assert not viewer.session_locked
+
+
 def test_viewer_paints_message_and_frame(qapp):
     viewer = ViewerWidget()
     viewer.resize(400, 400)

@@ -115,6 +115,28 @@ access can be revoked at any time from the *Connections* tab. There is
 no dependency
 on Windows RDP or any Microsoft-based authentication.
 
+## The Windows lock screen
+
+**A locked computer cannot be viewed or unlocked remotely.** The lock
+screen, the PIN/password prompt, and UAC elevation prompts run on a
+separate *secure desktop* that Windows deliberately walls off from
+ordinary applications: nothing running as the signed-in user may capture
+it or type into it, so no software can read or fill in a credential
+prompt. This app intentionally runs as the signed-in user — no admin
+rights, no system service — so it sits on the application side of that
+wall (remote-access products that can show the login screen install a
+privileged Windows service to cross it).
+
+What happens instead: when the shared computer locks, viewers stay
+connected and see a clear *"The remote computer is locked"* notice over
+the last frame, and any input they send is ignored until the computer is
+unlocked. The working assumption is that you (or someone nearby) can get
+to the shared computer to sign it in; once its desktop is unlocked,
+streaming and control resume on their own. If that round trip is a
+nuisance, keep the shared computer signed in while you work on it
+remotely — for example by lengthening its lock/sleep timeout in Windows
+settings.
+
 ## How it works
 
 All of this is pure Python — the GUI is PySide6 (Qt), and the two places

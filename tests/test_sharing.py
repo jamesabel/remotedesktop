@@ -30,6 +30,7 @@ def make_server(
     injector=None,
     clipboard=None,
     cursor_probe=None,
+    lock_probe=None,
     log_provider=None,
 ):
     # The server is a distinct "machine" from the client -> its own database.
@@ -40,6 +41,7 @@ def make_server(
         injector=injector,
         clipboard=clipboard,
         cursor_probe=cursor_probe,
+        lock_probe=lock_probe,
         log_provider=log_provider,
     )
     assert server.listen(0)
@@ -129,6 +131,36 @@ def test_cursor_shape_sent_on_admission_and_on_change_only(qapp, credentials, tm
         while time.monotonic() < deadline:
             qapp.processEvents()
         assert shapes == ["size_we", "ibeam"]
+    finally:
+        client.close()
+        server.close()
+
+
+def test_session_lock_sent_on_admission_and_on_change_only(qapp, credentials, tmp_path):
+    locked = [True]
+    server = make_server(
+        credentials, tmp_path, approve=lambda *_: True, lock_probe=lambda: locked[0]
+    )
+    client = make_client(tmp_path)
+    states: list[bool] = []
+    client.sessionLockChanged.connect(states.append)
+    statuses: list[str] = []
+    client.status.connect(statuses.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        # A viewer admitted while the session is already locked is told so
+        # immediately (its starting assumption is unlocked).
+        pump(qapp, lambda: states)
+        assert states == [True]
+        assert any("locked — sign in at the server machine" in s for s in statuses)
+        locked[0] = False
+        pump(qapp, lambda: len(states) >= 2)
+        # Give the broadcast timer a few more ticks: the probe is polled at
+        # the frame rate but must send only on change, never per tick.
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            qapp.processEvents()
+        assert states == [True, False]
     finally:
         client.close()
         server.close()

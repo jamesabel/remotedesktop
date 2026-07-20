@@ -34,6 +34,16 @@ _BUTTON_NAMES = {
     Qt.MouseButton.MiddleButton: "middle",
 }
 
+# Shown (over a dimmed last frame) while the server's session is locked: the
+# secure desktop cannot be captured or controlled remotely, so signing in
+# has to happen at the server machine itself.
+LOCKED_MESSAGE = (
+    "The remote computer is locked.\n"
+    "Its sign-in screen cannot be viewed or controlled remotely —\n"
+    "sign in at that computer to continue."
+)
+_LOCK_DIM = QColor(0, 0, 0, 160)
+
 # Wire cursor-shape names (cursor_shape.py on the server side) -> the local
 # cursor mirroring the remote one. Names this map doesn't know (a newer
 # server's vocabulary) fall back to the arrow.
@@ -78,6 +88,9 @@ class ViewerWidget(QWidget):
         # display-scaling factor (125-150% on most monitors), blurring text.
         self._scaled: QPixmap | None = None
         self._message = "Not connected"
+        # The server's session is locked (secure desktop): the frame is
+        # stale, so it is dimmed under a LOCKED_MESSAGE notice.
+        self._session_locked = False
         # Buttons/keys currently held, so releases can be forwarded even when
         # they happen outside the frame or when the widget loses focus —
         # otherwise the server would keep them pressed forever.
@@ -128,9 +141,22 @@ class ViewerWidget(QWidget):
         self._frame = None
         self._scaled = None
         self._message = message
+        self._session_locked = False
         self._pressed_buttons.clear()
         self._pressed_keys.clear()
         self.unsetCursor()  # a disconnected viewer shows the normal cursor
+        self.update()
+
+    @property
+    def session_locked(self) -> bool:
+        return self._session_locked
+
+    def set_session_locked(self, locked: bool) -> None:
+        """Dim the view under a lock notice while the server's session is
+        locked (the secure desktop is neither captured nor controllable)."""
+        if self._session_locked == locked:
+            return
+        self._session_locked = locked
         self.update()
 
     def set_remote_cursor(self, shape: str) -> None:
@@ -270,32 +296,37 @@ class ViewerWidget(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.GlobalColor.black)
         if self._frame is None:
+            if not self._session_locked:  # the lock notice below says it all
+                painter.setPen(Qt.GlobalColor.white)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
+        else:
+            rect = self._display_rect().toRect()
+            dpr = self.devicePixelRatioF()
+            target = QSize(round(rect.width() * dpr), round(rect.height() * dpr))
+            if (
+                self._scaled is None
+                or self._scaled.size() != target
+                or self._scaled.devicePixelRatio() != dpr
+            ):
+                if self._frame.size() == target:
+                    # Displayed at exactly 1:1 device pixels — no resample at all.
+                    self._scaled = QPixmap(self._frame)
+                else:
+                    self._scaled = self._frame.scaled(
+                        target,
+                        Qt.AspectRatioMode.IgnoreAspectRatio,  # rect is already aspect-correct
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                self._scaled.setDevicePixelRatio(dpr)
+            painter.drawPixmap(rect.topLeft(), self._scaled)
+            # Thin outline marking where the remote screen ends and the app
+            # background begins (they can otherwise blend together).
+            painter.setPen(self._border_color())
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+        if self._session_locked:
+            painter.fillRect(self.rect(), _LOCK_DIM)
             painter.setPen(Qt.GlobalColor.white)
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
-            return
-        rect = self._display_rect().toRect()
-        dpr = self.devicePixelRatioF()
-        target = QSize(round(rect.width() * dpr), round(rect.height() * dpr))
-        if (
-            self._scaled is None
-            or self._scaled.size() != target
-            or self._scaled.devicePixelRatio() != dpr
-        ):
-            if self._frame.size() == target:
-                # Displayed at exactly 1:1 device pixels — no resample at all.
-                self._scaled = QPixmap(self._frame)
-            else:
-                self._scaled = self._frame.scaled(
-                    target,
-                    Qt.AspectRatioMode.IgnoreAspectRatio,  # rect is already aspect-correct
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            self._scaled.setDevicePixelRatio(dpr)
-        painter.drawPixmap(rect.topLeft(), self._scaled)
-        # Thin outline marking where the remote screen ends and the app
-        # background begins (they can otherwise blend together).
-        painter.setPen(self._border_color())
-        painter.drawRect(rect.adjusted(0, 0, -1, -1))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, LOCKED_MESSAGE)
 
     def _border_color(self) -> QColor:
         """Outline shade for the current theme (follows the window background)."""
