@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 import platformdirs
+from tobool import to_bool_strict
 
 
 def default_config_dir() -> Path:
@@ -42,6 +43,21 @@ class Settings:
             (key, value),
         )
         self._db.commit()
+
+    def get_bool(self, key: str, default: bool = False) -> bool:
+        """A boolean setting, stored as "1"/"0" (the historical on-disk
+        form). Anything unparseable falls back to the default — settings
+        are data, and junk must never take the app down."""
+        value = self.get(key)
+        if value is None:
+            return default
+        try:
+            return to_bool_strict(value)
+        except ValueError:
+            return default
+
+    def set_bool(self, key: str, value: bool) -> None:
+        self.set(key, "1" if value else "0")
 
 
 def load_client_identity(connection: sqlite3.Connection) -> tuple[str, str]:

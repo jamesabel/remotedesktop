@@ -36,6 +36,7 @@ from remotedesktop.server import (
 PERFORMANCE_WINDOW_KEY = "performance_window_seconds"
 DEFAULT_PERFORMANCE_WINDOW_SECONDS = 120
 CLIPBOARD_SYNC_KEY = "clipboard_sync_enabled"
+REDUCE_EFFECTS_KEY = "reduce_effects_enabled"
 VIEWER_KEY = "viewer_enabled"
 THEME_KEY = "theme"
 THEME_SYSTEM = "system"  # follow the OS light/dark setting
@@ -45,7 +46,13 @@ _THEMES = (THEME_SYSTEM, THEME_LIGHT, THEME_DARK)
 
 
 def load_clipboard_sync_enabled(settings: Settings) -> bool:
-    return settings.get(CLIPBOARD_SYNC_KEY, "1") != "0"
+    return settings.get_bool(CLIPBOARD_SYNC_KEY, True)
+
+
+def load_reduce_effects_enabled(settings: Settings) -> bool:
+    # Default on (per the user's request): the effects come back the moment
+    # the last viewer disconnects, and nothing is persisted OS-side.
+    return settings.get_bool(REDUCE_EFFECTS_KEY, True)
 
 
 def load_theme(settings: Settings) -> str:
@@ -69,7 +76,7 @@ def apply_theme(theme: str) -> None:
 
 
 def load_viewer_enabled(settings: Settings) -> bool:
-    return settings.get(VIEWER_KEY, "1") != "0"
+    return settings.get_bool(VIEWER_KEY, True)
 
 
 def load_performance_window_seconds(settings: Settings) -> int:
@@ -89,6 +96,9 @@ class PreferencesTab(QWidget):
     # The viewer (client) role: whether this instance connects to other
     # computers at all. The window shows/hides the client UI accordingly.
     viewerModeChanged = Signal(bool)
+    # Reduce Windows visual effects while viewers are connected; the window
+    # owns the VisualEffectsReducer and applies/restores on this.
+    reduceEffectsChanged = Signal(bool)
 
     def __init__(
         self,
@@ -121,6 +131,20 @@ class PreferencesTab(QWidget):
         self.clipboard_checkbox = QCheckBox("Sync clipboard with connected computers")
         self.clipboard_checkbox.setChecked(load_clipboard_sync_enabled(settings))
         self.clipboard_checkbox.toggled.connect(self._on_clipboard_toggled)
+        self.reduce_effects_checkbox = QCheckBox(
+            "Reduce Windows visual effects while sharing this screen"
+        )
+        self.reduce_effects_checkbox.setToolTip(
+            "Makes the remote view feel more responsive: window animations, "
+            "menu fades, and shadows each stream as a burst of screen "
+            "updates, so turning them off while viewers are connected lets "
+            "the remote screen snap instead of smearing — and saves "
+            "bandwidth. Submenus also open faster. Your Windows settings "
+            "come back when the last viewer disconnects; nothing is "
+            "permanently changed."
+        )
+        self.reduce_effects_checkbox.setChecked(load_reduce_effects_enabled(settings))
+        self.reduce_effects_checkbox.toggled.connect(self._on_reduce_effects_toggled)
         # The three-state sharing choice: off, view-only, or full control.
         self.sharing_off_radio = QRadioButton(
             "Not shared — no one can see this computer's screen"
@@ -185,6 +209,7 @@ class PreferencesTab(QWidget):
         layout.addRow("Theme", theme_box)
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
+        layout.addRow(self.reduce_effects_checkbox)
         layout.addRow(self.autostart_checkbox)
         layout.addRow(self.restart_button)
 
@@ -203,7 +228,7 @@ class PreferencesTab(QWidget):
         )
 
     def _on_viewer_toggled(self, checked: bool) -> None:
-        self._settings.set(VIEWER_KEY, "1" if checked else "0")
+        self._settings.set_bool(VIEWER_KEY, checked)
         self.statusMessage.emit(
             "Client (viewer) role enabled — this computer can connect to servers"
             if checked
@@ -222,8 +247,17 @@ class PreferencesTab(QWidget):
             }[theme]
         )
 
+    def _on_reduce_effects_toggled(self, checked: bool) -> None:
+        self._settings.set_bool(REDUCE_EFFECTS_KEY, checked)
+        self.statusMessage.emit(
+            "Windows visual effects will be reduced while viewers are connected"
+            if checked
+            else "Windows visual effects will be left unchanged while sharing"
+        )
+        self.reduceEffectsChanged.emit(checked)
+
     def _on_clipboard_toggled(self, checked: bool) -> None:
-        self._settings.set(CLIPBOARD_SYNC_KEY, "1" if checked else "0")
+        self._settings.set_bool(CLIPBOARD_SYNC_KEY, checked)
         if self._clipboard is not None:
             self._clipboard.enabled = checked
         self.statusMessage.emit(

@@ -14,6 +14,27 @@ def test_settings_round_trip(tmp_path) -> None:
     assert Settings(db.connect(path)).get("missing", "fallback") == "fallback"
 
 
+def test_boolean_settings_round_trip_and_tolerate_legacy_values(tmp_path) -> None:
+    settings = Settings(db.connect(tmp_path / "app.db"))
+    # set_bool stores the historical "1"/"0" on-disk form.
+    settings.set_bool("flag", True)
+    assert settings.get("flag") == "1"
+    assert settings.get_bool("flag") is True
+    settings.set_bool("flag", False)
+    assert settings.get("flag") == "0"
+    assert settings.get_bool("flag") is False
+    # Missing keys take the caller's default.
+    assert settings.get_bool("missing") is False
+    assert settings.get_bool("missing", True) is True
+    # Other truthy spellings parse too (tobool), and junk never raises —
+    # it falls back to the default.
+    settings.set("flag", "true")
+    assert settings.get_bool("flag") is True
+    settings.set("flag", "junk-value")
+    assert settings.get_bool("flag", True) is True
+    assert settings.get_bool("flag", False) is False
+
+
 def test_client_identity_is_created_and_stable(tmp_path) -> None:
     path = tmp_path / "app.db"
     client_id, name = load_client_identity(db.connect(path))

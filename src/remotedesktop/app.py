@@ -55,6 +55,7 @@ from remotedesktop.preferences import (
     apply_theme,
     load_clipboard_sync_enabled,
     load_performance_window_seconds,
+    load_reduce_effects_enabled,
     load_theme,
     load_viewer_enabled,
 )
@@ -62,6 +63,7 @@ from remotedesktop.server import SharingTab, ViewersTable
 from remotedesktop.sharing import ShareClient
 from remotedesktop.single_instance import SingleInstance
 from remotedesktop.viewer import ViewerWidget
+from remotedesktop.visual_effects import VisualEffectsReducer
 
 _log = logging.getLogger("remotedesktop.app")
 
@@ -127,6 +129,7 @@ class MainWindow(QMainWindow):
         connect_port: int = DEFAULT_CONNECT_PORT,
         tray_available: bool | None = None,
         reconnect_base_seconds: float = 2.0,
+        effects_reducer: VisualEffectsReducer | None = None,
     ) -> None:
         super().__init__()
         self._reconnect_base = reconnect_base_seconds
@@ -164,6 +167,15 @@ class MainWindow(QMainWindow):
         self._tray: QSystemTrayIcon | None = None
         self._tray_notified = False
         self._quitting = False
+        # Windows visual effects are reduced only while someone is actually
+        # watching (fewer animation frames to encode and ship) and restored
+        # when the last viewer leaves. The default reducer changes real OS
+        # settings — tests always inject one with a fake backend.
+        self._effects_reducer = (
+            effects_reducer if effects_reducer is not None else VisualEffectsReducer()
+        )
+        self._reduce_effects = load_reduce_effects_enabled(self._settings)
+        self._sharing_viewer_count = 0
         self._fullscreen_state: dict | None = None
         self._fullscreen_hint: QLabel | None = None
 
@@ -180,6 +192,7 @@ class MainWindow(QMainWindow):
         self.sharing_tab.peerEvent.connect(self._record_server_peer)
         self.sharing_tab.sharingChanged.connect(self._on_sharing_changed)
         self.sharing_tab.viewerCountChanged.connect(self._update_sharing_indicator)
+        self.sharing_tab.viewerCountChanged.connect(self._on_viewer_count_changed)
 
         # One tab per server connection (inserted at the front, closable),
         # followed by the fixed tabs, which never get a close button. While
@@ -338,6 +351,7 @@ class MainWindow(QMainWindow):
         # three-state choice) and the viewer role's UI.
         self.preferences_tab.sharingModeChanged.connect(self.sharing_tab.set_mode)
         self.preferences_tab.viewerModeChanged.connect(self._set_viewer_enabled)
+        self.preferences_tab.reduceEffectsChanged.connect(self._on_reduce_effects_changed)
         self.preferences_tab.restart_button.clicked.connect(self._restart_app)
         self._tabs.addTab(self.preferences_tab, "Preferences")
         self._about_tab = AboutTab()
@@ -713,6 +727,27 @@ class MainWindow(QMainWindow):
         self._update_performance_tabs()
         self._update_connections_groups()
 
+    def _on_viewer_count_changed(self, count: int) -> None:
+        self._sharing_viewer_count = count
+        self._update_effects_reduction()
+
+    def _on_reduce_effects_changed(self, enabled: bool) -> None:
+        self._reduce_effects = enabled
+        self._update_effects_reduction()  # applies/restores live mid-session
+
+    def _update_effects_reduction(self) -> None:
+        """Reduce Windows visual effects while the preference is on AND a
+        viewer is connected; restore the user's values otherwise. Stop,
+        quit, and restart all reach here via their viewerCountChanged(0)."""
+        if self._reduce_effects and self._sharing_viewer_count > 0:
+            if self._effects_reducer.apply():
+                self.log(
+                    "Windows visual effects reduced while viewers are connected "
+                    "(restored when the last one disconnects)"
+                )
+        elif self._effects_reducer.restore():
+            self.log("Windows visual effects restored")
+
     def _quit(self) -> None:
         self._quitting = True
         self.close()
@@ -758,6 +793,9 @@ class MainWindow(QMainWindow):
             self._cancel_reconnect(session)
             session.client.close()
         self.sharing_tab.shutdown()
+        # shutdown's viewerCountChanged(0) already restored the effects;
+        # this is the safety net for any exit path that skipped the signal.
+        self._effects_reducer.restore()
         super().closeEvent(event)
         QApplication.quit()  # main() disables quit-on-last-window-closed
 
