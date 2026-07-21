@@ -12,16 +12,19 @@ tray menu. Only one instance runs per user session (`single_instance`)."""
 
 import json
 import logging
+import re
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtCore import QObject, QProcess, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtGui import QCloseEvent, QImage, QKeySequence
 from PySide6.QtNetwork import QNetworkInterface
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -314,11 +317,33 @@ class MainWindow(QMainWindow):
         # through, and the roles are changed only in Preferences.
         self.client_role_button = self._make_role_button()
         self.server_role_button = self._make_role_button()
+        # Screen capture of the current session tab (the last received frame
+        # at the server's full resolution). Buttons live in the dock; the
+        # same handlers back the File-menu actions. Enabled only while the
+        # current tab shows a frame (_update_capture_actions).
+        self.copy_capture_button = QPushButton("Copy")
+        self.copy_capture_button.setToolTip(
+            "Copy a screen capture of the current session to the clipboard"
+        )
+        self.copy_capture_button.clicked.connect(self._copy_screen_capture)
+        self.save_capture_button = QPushButton("Save…")
+        self.save_capture_button.setToolTip(
+            "Save a screen capture of the current session to a file"
+        )
+        self.save_capture_button.clicked.connect(self._save_screen_capture)
+        # Nothing to capture until a session tab shows a frame.
+        self.copy_capture_button.setEnabled(False)
+        self.save_capture_button.setEnabled(False)
+        self._capture_group = QGroupBox("Screen capture")
+        capture_layout = QHBoxLayout(self._capture_group)
+        capture_layout.addWidget(self.copy_capture_button)
+        capture_layout.addWidget(self.save_capture_button)
         dock_body = QWidget()
         self._dock_layout = QVBoxLayout(dock_body)
         self._dock_layout.addWidget(self.client_role_button)
         self._dock_layout.addWidget(self.server_role_button)
         self._dock_layout.addWidget(self.discovery_panel)
+        self._dock_layout.addWidget(self._capture_group)
         # A permanent trailing spacer: it takes the leftover height while
         # the discovery panel is hidden (keeping the indicators pinned to
         # the top), and collapses to nothing while the panel is visible
@@ -326,6 +351,7 @@ class MainWindow(QMainWindow):
         self._dock_layout.addStretch(0)
         if not self._viewer_enabled:
             self.discovery_panel.hide()
+            self._capture_group.hide()
         self._update_dock_layout()
         # No title bar at all: the contents are self-explanatory, and the
         # View menu ("Panel") is the way to show or hide it — a blank header
@@ -416,6 +442,15 @@ class MainWindow(QMainWindow):
         self.close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
         self.close_tab_action.triggered.connect(self._close_current_session_tab)
         self.close_tab_action.setEnabled(False)  # startup tab is a fixed tab
+        self._file_menu.addSeparator()
+        # Same handlers as the dock's Screen capture buttons; enabled state
+        # is kept in sync with them (_update_capture_actions).
+        self.copy_capture_action = self._file_menu.addAction("Copy screen &capture")
+        self.copy_capture_action.triggered.connect(self._copy_screen_capture)
+        self.copy_capture_action.setEnabled(False)
+        self.save_capture_action = self._file_menu.addAction("&Save screen capture…")
+        self.save_capture_action.triggered.connect(self._save_screen_capture)
+        self.save_capture_action.setEnabled(False)
         self._file_menu.addSeparator()
         self.quit_action = self._file_menu.addAction("&Quit")
         self.quit_action.setShortcut(QKeySequence("Ctrl+Q"))
@@ -537,7 +572,7 @@ class MainWindow(QMainWindow):
         """Give the dock's leftover height to the panel or the spacer."""
         panel_visible = self._viewer_enabled
         self._dock_layout.setStretch(2, 1 if panel_visible else 0)  # panel
-        self._dock_layout.setStretch(3, 0 if panel_visible else 1)  # spacer
+        self._dock_layout.setStretch(4, 0 if panel_visible else 1)  # spacer
 
     def _update_role_indicators(self) -> None:
         self.client_role_button.setChecked(self._viewer_enabled)
@@ -560,8 +595,10 @@ class MainWindow(QMainWindow):
             if placeholder_index != -1:
                 self._tabs.removeTab(placeholder_index)
             self.discovery_panel.hide()
+            self._capture_group.hide()
         else:
             self.discovery_panel.show()
+            self._capture_group.show()
             self._ensure_placeholder()
             self._tabs.setCurrentIndex(0)
             if self._auto_scan:
@@ -581,6 +618,74 @@ class MainWindow(QMainWindow):
         self.fullscreen_action.setEnabled(session is not None)
         self.actual_size_action.setEnabled(session is not None)
         self.actual_size_action.setChecked(session.actual_size if session else False)
+        self._update_capture_actions()
+
+    # ------------------------------------------------------ screen capture
+
+    def _update_capture_actions(self) -> None:
+        """Capture is possible while the current tab shows a frame; the dock
+        buttons and the File-menu actions enable and disable together."""
+        session = self._session_for_page(self._tabs.currentWidget())
+        available = session is not None and session.viewer.has_frame
+        for action in (
+            self.copy_capture_button,
+            self.save_capture_button,
+            self.copy_capture_action,
+            self.save_capture_action,
+        ):
+            action.setEnabled(available)
+
+    def _current_capture(self) -> tuple[ServerSession, QImage] | None:
+        """The current tab's session and its full-resolution frame, or None
+        (the handlers can fire with no frame via QAction.trigger())."""
+        session = self._session_for_page(self._tabs.currentWidget())
+        if session is None:
+            return None
+        image = session.viewer.frame_image()
+        if image is None:
+            return None
+        return session, image
+
+    def _copy_screen_capture(self) -> None:
+        capture = self._current_capture()
+        if capture is None:
+            return
+        session, image = capture
+        # copy_image does not echo to peers: sending the server a capture of
+        # its own screen (or spamming viewers) would be pure waste.
+        self._clipboard.copy_image(image)
+        self.log(
+            f"Screen capture of {session.name} "
+            f"({image.width()}x{image.height()}) copied to the clipboard"
+        )
+
+    def _save_screen_capture(self) -> None:
+        capture = self._current_capture()
+        if capture is None:
+            return
+        session, image = capture
+        # Default: Pictures\<server> 2026-07-20 143059.png (the server name
+        # is a hostname, but sanitize for safety — it came off the wire).
+        name = re.sub(r'[<>:"/\\|?*]', "_", session.name).strip() or "server"
+        stamp = time.strftime("%Y-%m-%d %H%M%S")
+        directory = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.PicturesLocation
+        )
+        default = str(Path(directory) / f"{name} {stamp}.png") if directory else f"{name} {stamp}.png"
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save screen capture", default, "PNG image (*.png)"
+        )
+        if not path:
+            return  # cancelled
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        if image.save(path, "PNG"):  # ty: ignore[no-matching-overload]
+            self.log(
+                f"Screen capture of {session.name} "
+                f"({image.width()}x{image.height()}) saved to {path}"
+            )
+        else:
+            self.log(f"Could not save the screen capture to {path}")
 
     def _close_current_session_tab(self) -> None:
         session = self._session_for_page(self._tabs.currentWidget())
@@ -1070,6 +1175,7 @@ class MainWindow(QMainWindow):
         if not any(s.connected for s in self._sessions if s is not session):
             self.client_performance.reset()
         session.viewer.clear(f"Connecting to {session.name} …")
+        self._update_capture_actions()  # cleared viewer; tab may already be current
         self._tabs.setCurrentWidget(session.page)
         self._set_session_status(
             session, f"Connecting to {session.name} ({session.key}) …"
@@ -1111,6 +1217,7 @@ class MainWindow(QMainWindow):
             f"Waiting for approval — someone at {session.name} "
             "must allow this connection"
         )
+        self._update_capture_actions()
         self._set_session_status(
             session,
             f"Waiting for the user on {session.name} to approve this computer …",
@@ -1178,6 +1285,7 @@ class MainWindow(QMainWindow):
         session.auto_reconnect = False
         self.client_inventory.record(session.key, "denied", name=session.name)
         session.viewer.clear(f"Connection denied: {reason}")
+        self._update_capture_actions()
         self._set_session_status(session, f"Denied by {session.name}: {reason}")
         self._update_window_title()
 
@@ -1191,6 +1299,7 @@ class MainWindow(QMainWindow):
             self.client_inventory.record(session.key, "disconnected", name=session.name)
             session.viewer.clear("Disconnected")
             self._set_session_status(session, f"Disconnected from {session.name}")
+        self._update_capture_actions()  # a cleared viewer has nothing to capture
         self._update_window_title()
         self._sessions_source.notify()
         if session.auto_reconnect and not session.denied and not self._quitting:
@@ -1273,6 +1382,9 @@ class MainWindow(QMainWindow):
             return
         session.frame_count += 1
         session.viewer.show_frame(image)
+        # Unconditional (not just the first frame): auto-reconnect refills a
+        # cleared viewer without passing through _connect_session.
+        self._update_capture_actions()
         self._set_session_status(
             session,
             f"Viewing {self._server_label(session)} — {image.width()}x{image.height()} — "

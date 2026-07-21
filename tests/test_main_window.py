@@ -4,6 +4,7 @@ import socket
 import sys
 
 from PySide6.QtCore import QProcess, Qt
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
 
 from remotedesktop import client as client_module
@@ -355,6 +356,117 @@ def test_forget_server_disconnects_and_forgets(qapp, credentials, tmp_path, monk
             QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
         )
         window._forget_server(key)
+    finally:
+        window.close()
+        server.close()
+
+
+def _capture_widgets(window):
+    return (
+        window.copy_capture_button,
+        window.save_capture_button,
+        window.copy_capture_action,
+        window.save_capture_action,
+    )
+
+
+def test_capture_buttons_and_actions_follow_frame_availability(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        assert not any(w.isEnabled() for w in _capture_widgets(window))
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.viewer.has_frame)
+        assert all(w.isEnabled() for w in _capture_widgets(window))
+        server.close()  # dropping the connection clears the viewer again
+        pump(qapp, lambda: not session.viewer.has_frame)
+        assert not any(w.isEnabled() for w in _capture_widgets(window))
+    finally:
+        window.close()
+        server.close()
+
+
+def test_capture_group_hidden_without_the_viewer_role(qapp, credentials, tmp_path):
+    window = make_window(tmp_path, credentials, serving=True, viewer=False)
+    try:
+        assert window._capture_group.isHidden()
+    finally:
+        window.close()
+
+
+def test_copy_screen_capture_goes_through_clipboard_sync(qapp, credentials, tmp_path):
+    class RecordingSync:
+        def __init__(self):
+            self.images = []
+
+        def copy_image(self, image):
+            self.images.append(image)
+
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.viewer.has_frame)
+        # A recording stand-in, so the test never touches the OS clipboard.
+        recorder = RecordingSync()
+        window._clipboard = recorder
+        window.copy_capture_button.click()
+        assert len(recorder.images) == 1
+        assert recorder.images[0].size() == session.viewer.frame_image().size()
+        assert "copied to the clipboard" in window.connection_log.toPlainText()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_save_screen_capture_writes_png(qapp, credentials, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    target = tmp_path / "capture.png"
+    dialogs = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        staticmethod(
+            lambda parent, title, default, filter: dialogs.append(default)
+            or (str(target), filter)
+        ),
+    )
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.viewer.has_frame)
+        window.save_capture_action.trigger()  # the menu path this time
+        assert target.exists()
+        saved = QImage(str(target))
+        assert saved.size() == session.viewer.frame_image().size()
+        # The server's reported name (its hostname, after the on-connect
+        # rename) seeds the default filename.
+        assert dialogs and session.name in dialogs[0]
+        assert f"saved to {target}" in window.connection_log.toPlainText()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_save_screen_capture_cancelled_dialog_saves_nothing(qapp, credentials, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", ""))
+    )
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.viewer.has_frame)
+        window.save_capture_button.click()
+        assert "saved to" not in window.connection_log.toPlainText()
     finally:
         window.close()
         server.close()
@@ -1195,11 +1307,12 @@ def test_role_indicators_are_inert_buttons(qapp, credentials, tmp_path):
 
 
 def test_dock_keeps_indicators_at_the_top_in_both_roles(qapp, credentials, tmp_path):
-    # Layout indexes: 0/1 = indicator buttons, 2 = discovery panel, 3 = spacer.
+    # Layout indexes: 0/1 = indicator buttons, 2 = discovery panel,
+    # 3 = screen-capture group, 4 = spacer.
     window = make_window(tmp_path, credentials, serving=True, viewer=False)
     try:
         assert window._dock_layout.stretch(2) == 0  # hidden panel
-        assert window._dock_layout.stretch(3) == 1  # spacer pins buttons up
+        assert window._dock_layout.stretch(4) == 1  # spacer pins buttons up
         window.show()
         qapp.processEvents()
         # The two indicators sit adjacent at the top, not spread apart.
@@ -1211,14 +1324,14 @@ def test_dock_keeps_indicators_at_the_top_in_both_roles(qapp, credentials, tmp_p
     window = make_window(tmp_path, credentials, db_name="viewer.db")
     try:
         assert window._dock_layout.stretch(2) == 1  # panel takes the height
-        assert window._dock_layout.stretch(3) == 0
+        assert window._dock_layout.stretch(4) == 0
         # Live toggle off: the spacer takes over immediately (this was the
         # spaced-out bug — the spacer only existed for non-viewer startup).
         window.preferences_tab.viewer_checkbox.setChecked(False)
-        assert window._dock_layout.stretch(3) == 1
+        assert window._dock_layout.stretch(4) == 1
         window.preferences_tab.viewer_checkbox.setChecked(True)
         assert window._dock_layout.stretch(2) == 1
-        assert window._dock_layout.stretch(3) == 0
+        assert window._dock_layout.stretch(4) == 0
     finally:
         window.close()
 

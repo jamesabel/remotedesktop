@@ -69,6 +69,25 @@ class ClipboardSync(QObject):
             ).decode()
         self.changed.emit(payload)
 
+    def copy_image(self, image: QImage) -> None:
+        """Place an app-generated image (a screen capture) on the local
+        clipboard WITHOUT echoing it to peers: its signature is recorded
+        first, so the asynchronous dataChanged this set fires is ignored —
+        the same mechanism apply() uses. Sending a capture of the server's
+        own screen back to it would be pure waste.
+
+        Deliberately not gated on `enabled`: that preference governs
+        syncing, and this is a local copy.
+        """
+        if image.isNull():
+            return
+        self._last_signature = (None, _image_hash(image))
+        self._applying = True
+        try:
+            self._clipboard.setImage(image)
+        finally:
+            self._applying = False
+
     def apply(self, payload: dict) -> None:
         if not self.enabled:
             return  # peers may still send payloads; they are dropped locally
