@@ -1,5 +1,7 @@
 import logging
 
+from PySide6.QtCore import qInstallMessageHandler, qWarning
+
 from remotedesktop import logs
 
 
@@ -18,6 +20,26 @@ def test_init_logging_writes_formatted_records(tmp_path):
     finally:
         # Detach the file handler so other tests (and later init calls)
         # don't keep writing into this tmp_path file.
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+
+
+def test_init_logging_routes_qt_messages_to_the_log_file(tmp_path):
+    # Qt's default message handler writes to stderr — a GUI app must never
+    # do that, so init_logging redirects Qt's output into the log file.
+    path = logs.init_logging("client", directory=tmp_path)
+    root = logging.getLogger("remotedesktop")
+    try:
+        qWarning("qt grumbled about something")
+        for handler in root.handlers:
+            handler.flush()
+        text = path.read_text(encoding="utf-8")
+        assert "qt grumbled about something" in text
+        assert "WARNING" in text
+        assert "remotedesktop.qt" in text
+    finally:
+        qInstallMessageHandler(None)  # back to Qt's default handler
         for handler in list(root.handlers):
             root.removeHandler(handler)
             handler.close()
