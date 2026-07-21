@@ -16,7 +16,7 @@ import logging.handlers
 from pathlib import Path
 
 import platformdirs
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QMessageLogContext, Qt, QtMsgType, qInstallMessageHandler
 from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout, QWidget
 
 # Cap on what a peer gets when it asks for our log: the most recent entries
@@ -70,12 +70,39 @@ class PeerLogDialog(QDialog):
         layout.addWidget(view)
 
 
+_QT_LEVELS = {
+    QtMsgType.QtDebugMsg: logging.DEBUG,
+    QtMsgType.QtInfoMsg: logging.INFO,
+    QtMsgType.QtWarningMsg: logging.WARNING,
+    QtMsgType.QtCriticalMsg: logging.ERROR,
+    QtMsgType.QtFatalMsg: logging.CRITICAL,
+}
+
+
+def _qt_message_handler(
+    mode: QtMsgType, context: QMessageLogContext, message: str
+) -> None:
+    # Category ("qt.qpa.mime", ...) is how Qt names the subsystem; file/line
+    # are only populated in debug builds of Qt, so they aren't included.
+    category = context.category
+    if category and category != "default":
+        message = f"{category}: {message}"
+    logging.getLogger("remotedesktop.qt").log(
+        _QT_LEVELS.get(mode, logging.WARNING), message
+    )
+
+
 def init_logging(app_name: str, *, directory: Path | None = None) -> Path:
     """Write "remotedesktop" logger output to <log dir>/<app_name>.log.
+
+    Also routes Qt's own log output (e.g. "qt.qpa.mime: Retrying to obtain
+    clipboard.") into the same file: Qt's default message handler writes to
+    stderr, which a GUI app must never do.
 
     Returns the log file path. `directory` exists for tests; the apps use
     the platformdirs log dir.
     """
+    qInstallMessageHandler(_qt_message_handler)
     log_dir = directory if directory is not None else default_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_path(app_name, directory=directory)
