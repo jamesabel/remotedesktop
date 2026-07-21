@@ -335,7 +335,9 @@ class MainWindow(QMainWindow):
         self.copy_capture_button.setEnabled(False)
         self.save_capture_button.setEnabled(False)
         self._capture_group = QGroupBox("Screen capture")
-        capture_layout = QHBoxLayout(self._capture_group)
+        # Stacked, not side by side: the dock is narrow and its width is
+        # what the panel/server list gets — height is the cheaper dimension.
+        capture_layout = QVBoxLayout(self._capture_group)
         capture_layout.addWidget(self.copy_capture_button)
         capture_layout.addWidget(self.save_capture_button)
         dock_body = QWidget()
