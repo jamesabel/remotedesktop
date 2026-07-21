@@ -53,6 +53,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared, view only* and sharing becomes view-only, switchable live.
 - 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
+- 📸 **Screen captures** — grab the remote screen at its full resolution and copy it to the clipboard or save it as a PNG, from the *Screen capture* panel buttons or the File menu.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
 - 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Connections that were open when the app closed are restored on the next start.

@@ -104,6 +104,12 @@ class ViewerWidget(QWidget):
     def has_frame(self) -> bool:
         return self._frame is not None
 
+    def frame_image(self) -> QImage | None:
+        """The most recent frame at the server's full resolution (what a
+        screen capture saves/copies), or None while nothing is shown. The
+        display-only lock overlay is never part of it."""
+        return self._frame.toImage() if self._frame is not None else None
+
     def set_actual_size(self, enabled: bool) -> None:
         """Toggle 1:1 device-pixel display (host provides the scrolling)."""
         if self._actual_size == enabled:

@@ -157,6 +157,30 @@ def test_apply_image_payload_sets_clipboard_image(qapp):
     sync.apply(payload)
 
 
+def test_copy_image_sets_clipboard_without_echoing_to_peers(qapp):
+    clip = qapp.clipboard()
+    sync = ClipboardSync(clip)
+    emitted: list[dict] = []
+    sync.changed.connect(emitted.append)
+    sync.copy_image(_red_image())
+    for _ in range(10):
+        qapp.processEvents()
+    assert clip.image().pixelColor(0, 0).name() == "#ff0000"
+    # An app-generated copy (a screen capture) is never synced to peers.
+    assert emitted == []
+
+
+def test_copy_image_works_with_sync_disabled(qapp):
+    # The Preferences toggle governs syncing; a local capture copy is not sync.
+    clip = qapp.clipboard()
+    sync = ClipboardSync(clip)
+    sync.enabled = False
+    blue = QImage(4, 4, QImage.Format.Format_RGB32)
+    blue.fill(Qt.GlobalColor.blue)
+    sync.copy_image(blue)
+    assert clip.image().pixelColor(0, 0).name() == "#0000ff"
+
+
 def test_apply_ignores_garbage_payloads(qapp):
     clip = qapp.clipboard()
     clip.setText("before")
