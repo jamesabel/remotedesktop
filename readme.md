@@ -50,11 +50,14 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - 🔍 **Autodiscovery** — sharing computers announce themselves over UDP; the app lists every one on the LAN at startup, no addresses to type (press *Refresh* or F5 to rescan).
 - 🗂️ **Multiple computers at once** — view and control several computers simultaneously, each in its own tab named for that computer; the window title shows who you're connected to, even minimized.
 - 🖥️ **Lossless screen sharing** — pixel-exact at full resolution, DXGI desktop-duplication capture (~10 ms per 4K frame), and inter-frame delta compression: an unchanged screen sends nothing.
+- ⚡ **Fewer frames to send while sharing** — while at least one viewer is connected, Windows animations, menu fades, and shadows are turned off on the shared computer so the stream snaps instead of smearing; everything is restored the moment the last viewer leaves, and nothing is permanently changed (a recommended, default-on preference).
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared, view only* and sharing becomes view-only, switchable live.
+- 🖲️ **Cursor shape mirroring** — the pointer is never burned into the captured frame; instead your own cursor takes the remote cursor's shape (an I-beam over text, resize arrows on a window edge), so it is always crisp and lag-free.
 - 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
 - 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
 - 📸 **Screen captures** — grab the remote screen at its full resolution and copy it to the clipboard or save it as a PNG, from the *Screen capture* panel buttons or the File menu.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
+- 🔐 **Honest lock-screen behavior** — a locked server tells viewers so with a clear on-screen notice instead of a frozen frame, and streaming resumes by itself once someone signs in at the machine (see [The Windows lock screen](#the-windows-lock-screen)).
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
 - 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Connections that were open when the app closed are restored on the next start.
 - 🚀 **Hands-off operation** — optional start-at-login (per-user, no admin rights), close-to-tray while sharing (the screen stays available with the window closed), and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
@@ -154,7 +157,10 @@ an idle screen costs essentially nothing. When duplication is unavailable
 or gets lost — the secure desktop (UAC/logon screen), an RDP session, a
 display-mode change — the server transparently falls back to Qt's
 `QScreen.grabWindow` (~96 ms per frame) and keeps retrying duplication in
-the background.
+the background. The captured frame never contains the mouse pointer;
+instead the server reports the current cursor's *shape* whenever it
+changes, and each client mirrors it on its own local cursor — which is why
+the pointer you see is always sharp and moves with zero latency.
 
 **Screen transfer.** Frames are captured at up to 30 fps and compared with
 the previous capture in 64-row bands; only the bands that changed are
