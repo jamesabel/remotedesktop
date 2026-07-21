@@ -50,6 +50,31 @@ def test_history_change_applies_to_all_monitors(qapp, tmp_path):
     assert all(m.window_seconds == 180.0 for m in monitors)
 
 
+def test_every_preference_control_has_a_multiline_tooltip(qapp, tmp_path):
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    tab = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+    assert tab.reduce_effects_checkbox.text().endswith("(recommended)")
+    for control in (
+        tab.viewer_checkbox,
+        tab.sharing_off_radio,
+        tab.sharing_view_radio,
+        tab.sharing_control_radio,
+        tab.theme_system_radio,
+        tab.theme_light_radio,
+        tab.theme_dark_radio,
+        tab.history_minutes,
+        tab.clipboard_checkbox,
+        tab.reduce_effects_checkbox,
+        tab.autostart_checkbox,
+        tab.restart_button,
+    ):
+        tip = control.toolTip()
+        assert tip, f"{control.text() if hasattr(control, 'text') else control} has no tooltip"
+        # Long tooltips are broken into lines by hand — one endless line is
+        # hard to read. Short one-liners (the theme overrides) are fine.
+        assert "\n" in tip or len(tip) < 80
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows registry")
 def test_autostart_checkbox_toggles_registration(qapp, tmp_path):
     autostart = make_autostart()

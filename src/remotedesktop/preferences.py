@@ -118,6 +118,10 @@ class PreferencesTab(QWidget):
         )
         self._autostart = autostart if autostart is not None else Autostart()
         self.history_minutes = QSpinBox()
+        self.history_minutes.setToolTip(
+            "How much recent history the Performance tab's bandwidth and\n"
+            "round-trip-time graphs (and their statistics) cover."
+        )
         self.history_minutes.setRange(1, 30)
         self.history_minutes.setSuffix(" min")
         self.history_minutes.setValue(
@@ -125,23 +129,35 @@ class PreferencesTab(QWidget):
         )
         self.history_minutes.valueChanged.connect(self._on_history_changed)
         self.autostart_checkbox = QCheckBox("Start Remote Desktop when I log in to Windows")
+        self.autostart_checkbox.setToolTip(
+            "Registers this app in your Windows startup (per-user, no admin\n"
+            "rights) so it launches at login — minimized to the tray while\n"
+            "sharing is on, so sharing resumes after a reboot without\n"
+            "anyone having to launch the app."
+        )
         self.autostart_checkbox.setChecked(self._autostart.is_enabled())
         self.autostart_checkbox.setEnabled(self._autostart.available)
         self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
         self.clipboard_checkbox = QCheckBox("Sync clipboard with connected computers")
+        self.clipboard_checkbox.setToolTip(
+            "Text and images copied on this computer appear on connected\n"
+            "computers, and theirs appear here.\n"
+            "Turn off to keep this computer's clipboard private — nothing\n"
+            "is sent or applied in either direction."
+        )
         self.clipboard_checkbox.setChecked(load_clipboard_sync_enabled(settings))
         self.clipboard_checkbox.toggled.connect(self._on_clipboard_toggled)
         self.reduce_effects_checkbox = QCheckBox(
-            "Reduce Windows visual effects while sharing this screen"
+            "Reduce Windows visual effects while sharing this screen (recommended)"
         )
         self.reduce_effects_checkbox.setToolTip(
-            "Makes the remote view feel more responsive: window animations, "
-            "menu fades, and shadows each stream as a burst of screen "
-            "updates, so turning them off while viewers are connected lets "
-            "the remote screen snap instead of smearing — and saves "
-            "bandwidth. Submenus also open faster. Your Windows settings "
-            "come back when the last viewer disconnects; nothing is "
-            "permanently changed."
+            "Makes the remote view feel more responsive: window animations,\n"
+            "menu fades, and shadows each stream as a burst of screen\n"
+            "updates, so turning them off while viewers are connected lets\n"
+            "the remote screen snap instead of smearing — and saves\n"
+            "bandwidth. Submenus also open faster.\n"
+            "Your Windows settings come back when the last viewer\n"
+            "disconnects; nothing is permanently changed."
         )
         self.reduce_effects_checkbox.setChecked(load_reduce_effects_enabled(settings))
         self.reduce_effects_checkbox.toggled.connect(self._on_reduce_effects_toggled)
@@ -149,13 +165,29 @@ class PreferencesTab(QWidget):
         self.sharing_off_radio = QRadioButton(
             "Not shared — no one can see this computer's screen"
         )
+        self.sharing_off_radio.setToolTip(
+            "This computer neither listens for connections nor announces\n"
+            "itself on the LAN. Existing viewers are disconnected."
+        )
         self.sharing_view_radio = QRadioButton(
             "Shared, view only — clients can watch this computer's screen "
             "but not control it"
         )
+        self.sharing_view_radio.setToolTip(
+            "Approved clients see this screen live, but their keyboard and\n"
+            "mouse input is ignored.\n"
+            "Switching between view only and full control applies instantly\n"
+            "without disconnecting viewers."
+        )
         self.sharing_control_radio = QRadioButton(
             "Shared, full control — clients can watch this computer's screen "
             "and control it with their keyboard and mouse"
+        )
+        self.sharing_control_radio.setToolTip(
+            "Approved clients see this screen live and can type and click\n"
+            "as if sitting at this computer.\n"
+            "Each new client needs a one-time approval on this computer\n"
+            "before it can connect."
         )
         self._mode_radios = {
             SHARING_MODE_OFF: self.sharing_off_radio,
@@ -174,8 +206,14 @@ class PreferencesTab(QWidget):
             sharing_layout.addWidget(radio)
         # Theme: an explicit light/dark override, or follow the OS setting.
         self.theme_system_radio = QRadioButton("Follow the Windows light/dark setting")
+        self.theme_system_radio.setToolTip(
+            "Match Windows: the app switches automatically when the\n"
+            "Windows light/dark mode changes."
+        )
         self.theme_light_radio = QRadioButton("Light")
+        self.theme_light_radio.setToolTip("Always use the light theme.")
         self.theme_dark_radio = QRadioButton("Dark")
+        self.theme_dark_radio.setToolTip("Always use the dark theme.")
         self._theme_radios = {
             THEME_SYSTEM: self.theme_system_radio,
             THEME_LIGHT: self.theme_light_radio,
@@ -193,13 +231,19 @@ class PreferencesTab(QWidget):
             theme_layout.addWidget(radio)
         self.restart_button = QPushButton("Restart app")
         self.restart_button.setToolTip(
-            "Relaunch this app (e.g. after updating the software). It can be "
-            "clicked from a remote desktop session, so an update doesn't "
-            "require visiting this computer."
+            "Relaunch this app (e.g. after updating the software).\n"
+            "It can be clicked from a remote desktop session, so an update\n"
+            "doesn't require visiting this computer."
         )
         self.viewer_checkbox = QCheckBox(
             "Act as a client — discover servers on this LAN and view or "
             "control their screens"
+        )
+        self.viewer_checkbox.setToolTip(
+            "Shows the client-side UI: the server panel, session tabs, and\n"
+            "server history.\n"
+            "Turn off on a computer that only shares its screen — it will\n"
+            "not connect to (or scan for) other computers at all."
         )
         self.viewer_checkbox.setChecked(load_viewer_enabled(settings))
         self.viewer_checkbox.toggled.connect(self._on_viewer_toggled)
