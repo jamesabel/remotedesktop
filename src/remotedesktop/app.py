@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
         # persisted Preferences opt-out applies from the first moment.
         self._clipboard = ClipboardSync(parent=self)
         self._clipboard.enabled = load_clipboard_sync_enabled(self._settings)
+        self._clipboard.status.connect(self.log)
         self._known_servers = KnownServers(self._db)
         self._identity = load_client_identity(self._db)
         self._tray_available = (
