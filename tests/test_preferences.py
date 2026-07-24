@@ -3,12 +3,19 @@ import sys
 import pytest
 
 from remotedesktop import db
-from remotedesktop.autostart import Autostart
+from remotedesktop.autostart import (
+    START_MAXIMIZED,
+    START_MINIMIZED,
+    START_OFF,
+    Autostart,
+)
 from remotedesktop.config import Settings
 from remotedesktop.performance import PerformanceMonitor
 from remotedesktop.preferences import (
+    AUTOSTART_MODE_KEY,
     PERFORMANCE_WINDOW_KEY,
     PreferencesTab,
+    load_autostart_mode,
     load_performance_window_seconds,
 )
 
@@ -17,6 +24,14 @@ _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\PreferencesRun"
 
 def make_autostart():
     return Autostart(key_path=_TEST_AUTOSTART_KEY, value_name="prefs-test")
+
+
+@pytest.fixture(autouse=True)
+def _clean_test_run_key():
+    # Constructing a PreferencesTab mirrors the persisted start mode into the
+    # (injected, isolated) Run key — leave nothing behind.
+    yield
+    make_autostart().set_mode(START_OFF)
 
 
 def test_default_and_invalid_values_fall_back(tmp_path):
@@ -65,7 +80,10 @@ def test_every_preference_control_has_a_multiline_tooltip(qapp, tmp_path):
         tab.history_minutes,
         tab.clipboard_checkbox,
         tab.reduce_effects_checkbox,
-        tab.autostart_checkbox,
+        tab.autostart_minimized_radio,
+        tab.autostart_normal_radio,
+        tab.autostart_maximized_radio,
+        tab.autostart_off_radio,
         tab.restart_button,
     ):
         tip = control.toolTip()
@@ -75,22 +93,35 @@ def test_every_preference_control_has_a_multiline_tooltip(qapp, tmp_path):
         assert "\n" in tip or len(tip) < 80
 
 
+def test_autostart_mode_defaults_and_invalid_fall_back(tmp_path):
+    settings = Settings(db.connect(tmp_path / "prefs.db"))
+    assert load_autostart_mode(settings) == START_MINIMIZED  # the recommended default
+    settings.set(AUTOSTART_MODE_KEY, "sideways")
+    assert load_autostart_mode(settings) == START_MINIMIZED
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows registry")
-def test_autostart_checkbox_toggles_registration(qapp, tmp_path):
+def test_autostart_mode_radios_register_persist_and_apply(qapp, tmp_path):
     autostart = make_autostart()
     settings = Settings(db.connect(tmp_path / "prefs.db"))
     tab = PreferencesTab(settings, PerformanceMonitor(), autostart=autostart)
     messages = []
     tab.statusMessage.connect(messages.append)
-    try:
-        assert not autostart.is_enabled()
-        tab.autostart_checkbox.setChecked(True)
-        assert autostart.is_enabled()
-        assert any("start at login" in m for m in messages)
-        tab.autostart_checkbox.setChecked(False)
-        assert not autostart.is_enabled()
-    finally:
-        autostart.set_enabled(False)
+    # The default (start minimized) is selected AND registered at
+    # construction, so a fresh install starts at login with no clicks.
+    assert tab.autostart_minimized_radio.isChecked()
+    assert autostart.mode() == START_MINIMIZED
+    tab.autostart_maximized_radio.setChecked(True)
+    assert autostart.mode() == START_MAXIMIZED
+    assert settings.get(AUTOSTART_MODE_KEY) == START_MAXIMIZED
+    assert any("start maximized at login" in m for m in messages)
+    tab.autostart_off_radio.setChecked(True)
+    assert autostart.mode() == START_OFF
+    assert any("no longer start at login" in m for m in messages)
+    # A fresh tab (restart) reads the persisted choice and keeps it applied.
+    tab2 = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
+    assert tab2.autostart_off_radio.isChecked()
+    assert autostart.mode() == START_OFF
 
 
 def test_clipboard_toggle_persists_and_applies_live(qapp, tmp_path):

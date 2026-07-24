@@ -3,6 +3,7 @@
 import socket
 import sys
 
+import pytest
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
 from remotedesktop import client as client_module
 from remotedesktop import db
 from remotedesktop.app import MainWindow
-from remotedesktop.autostart import Autostart
+from remotedesktop.autostart import START_OFF, Autostart
 from remotedesktop.client import DiscoveryPanel
 from remotedesktop.config import PairedClients, Settings
 from remotedesktop.discovery import ServerInfo
@@ -23,6 +24,14 @@ from test_sharing_tab import stub_approval_prompt
 from test_visual_effects import FakeSpiBackend
 
 _TEST_AUTOSTART_KEY = r"Software\remotedesktop-tests\WindowRun"
+
+
+@pytest.fixture(autouse=True)
+def _clean_test_run_key():
+    # Building a window mirrors the persisted start-at-login mode into the
+    # (injected, isolated) Run key — leave nothing behind.
+    yield
+    Autostart(key_path=_TEST_AUTOSTART_KEY, value_name="main-window-test").set_mode(START_OFF)
 
 
 def make_window(

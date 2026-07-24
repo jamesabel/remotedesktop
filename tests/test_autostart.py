@@ -5,7 +5,15 @@ import sys
 
 import pytest
 
-from remotedesktop.autostart import Autostart, app_command, installed_launcher
+from remotedesktop.autostart import (
+    START_MAXIMIZED,
+    START_MINIMIZED,
+    START_NORMAL,
+    START_OFF,
+    Autostart,
+    app_command,
+    installed_launcher,
+)
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows registry")
 
@@ -18,39 +26,46 @@ def autostart():
         key_path=_TEST_KEY, value_name="test-app", legacy_value_name="test-legacy"
     )
     yield instance
-    instance.set_enabled(False)
+    instance.set_mode(START_OFF)
     instance._delete_value("test-legacy")
 
 
-def test_enable_disable_round_trip(autostart):
-    assert not autostart.is_enabled()
-    autostart.set_enabled(True)
-    assert autostart.is_enabled()
-    autostart.set_enabled(False)
-    assert not autostart.is_enabled()
+def test_mode_round_trip(autostart):
+    assert autostart.mode() == START_OFF
+    for mode in (START_MINIMIZED, START_NORMAL, START_MAXIMIZED):
+        autostart.set_mode(mode)
+        assert autostart.mode() == mode
+    autostart.set_mode(START_OFF)
+    assert autostart.mode() == START_OFF
 
 
-def test_disable_when_not_registered_is_a_noop(autostart):
-    autostart.set_enabled(False)
-    assert not autostart.is_enabled()
+def test_off_when_not_registered_is_a_noop(autostart):
+    autostart.set_mode(START_OFF)
+    assert autostart.mode() == START_OFF
 
 
 def test_registered_command_is_stored(autostart):
     import winreg
 
-    autostart.set_enabled(True)
+    autostart.set_mode(START_MINIMIZED)
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
         value, kind = winreg.QueryValueEx(key, "test-app")
     assert kind == winreg.REG_SZ
-    assert value == app_command()
+    assert value == app_command(START_MINIMIZED)
 
 
-def test_app_command_is_quoted_launchable_and_minimized():
-    command = app_command()
-    assert command.startswith('"')
-    assert "remotedesktop" in command
-    # Login-started instances go straight to the tray when sharing.
-    assert command.endswith("--minimized")
+def test_app_command_is_quoted_launchable_and_carries_the_mode_flag():
+    for mode, suffix in (
+        (START_MINIMIZED, " --minimized"),
+        (START_MAXIMIZED, " --maximized"),
+    ):
+        command = app_command(mode)
+        assert command.startswith('"')
+        assert "remotedesktop" in command
+        assert command.endswith(suffix)
+    # A normal window is the no-flag command line.
+    normal = app_command(START_NORMAL)
+    assert normal == app_command(START_MINIMIZED).removesuffix(" --minimized")
 
 
 def test_app_command_prefers_installed_launcher(tmp_path, monkeypatch):
@@ -64,7 +79,7 @@ def test_app_command_prefers_installed_launcher(tmp_path, monkeypatch):
     launcher.touch()
     monkeypatch.setattr(sys, "executable", str(clip_python))
     assert installed_launcher() == launcher
-    assert app_command() == f'"{launcher}" --minimized'
+    assert app_command(START_MINIMIZED) == f'"{launcher}" --minimized'
 
 
 def test_non_clip_layout_is_not_mistaken_for_an_install(tmp_path, monkeypatch):
@@ -78,7 +93,7 @@ def test_non_clip_layout_is_not_mistaken_for_an_install(tmp_path, monkeypatch):
     lookalike.touch()
     monkeypatch.setattr(sys, "executable", str(python))
     assert installed_launcher() is None
-    assert app_command() == f'"{python}" -m remotedesktop --minimized'
+    assert app_command(START_MINIMIZED) == f'"{python}" -m remotedesktop --minimized'
 
 
 def test_legacy_server_registration_migrates(autostart):
@@ -88,13 +103,13 @@ def test_legacy_server_registration_migrates(autostart):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
         winreg.SetValueEx(key, "test-legacy", 0, winreg.REG_SZ, '"old-server.exe"')
     autostart.migrate_legacy()
-    assert autostart.is_enabled()  # re-registered under the new name
+    assert autostart.mode() == START_MINIMIZED  # re-registered under the new name
     assert not autostart._has_value("test-legacy")  # old value removed
 
 
 def test_migrate_without_legacy_value_changes_nothing(autostart):
     autostart.migrate_legacy()
-    assert not autostart.is_enabled()
+    assert autostart.mode() == START_OFF
 
 
 def test_enabling_clears_a_lingering_legacy_value(autostart):
@@ -102,12 +117,24 @@ def test_enabling_clears_a_lingering_legacy_value(autostart):
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
         winreg.SetValueEx(key, "test-legacy", 0, winreg.REG_SZ, '"old-server.exe"')
-    autostart.set_enabled(True)
-    assert autostart.is_enabled()
+    autostart.set_mode(START_MINIMIZED)
+    assert autostart.mode() == START_MINIMIZED
     assert not autostart._has_value("test-legacy")
+
+
+def test_pre_mode_registration_reads_as_minimized(autostart):
+    import winreg
+
+    # An install upgraded from the checkbox era: the old value always carried
+    # --minimized, so it must read back as the minimized mode.
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
+        winreg.SetValueEx(
+            key, "test-app", 0, winreg.REG_SZ, '"C:\\old\\remotedesktop.exe" --minimized'
+        )
+    assert autostart.mode() == START_MINIMIZED
 
 
 def test_unavailable_autostart_is_inert(autostart):
     autostart.available = False
-    autostart.set_enabled(True)
-    assert not autostart.is_enabled()
+    autostart.set_mode(START_MINIMIZED)
+    assert autostart.mode() == START_OFF

@@ -2,8 +2,11 @@
 
 Performance-history length, the clipboard-sync opt-out, and the theme choice
 persist in `Settings` (the shared SQLite settings table, injectable in tests
-like every other store); the start-at-login option reads and writes the
-Windows Run registry key via `Autostart`. The clipboard toggle applies live
+like every other store); the start-at-login choice (a four-way start mode —
+minimized is the default and recommended) persists there too
+(`autostart_mode`) and is mirrored into the Windows Run registry key via
+`Autostart` — at every construction, so the default takes effect on a fresh
+install without anyone visiting Preferences. The clipboard toggle applies live
 to the shared `ClipboardSync` (the `clipboard=` opt-in collaborator
 pattern). The theme radios (follow-OS / light / dark) apply live via
 `apply_theme`; `MainWindow` re-applies the persisted choice at startup.
@@ -23,7 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop.autostart import Autostart
+from remotedesktop.autostart import (
+    START_MAXIMIZED,
+    START_MINIMIZED,
+    START_MODES,
+    START_NORMAL,
+    START_OFF,
+    Autostart,
+)
 from remotedesktop.config import Settings
 from remotedesktop.performance import PerformanceMonitor
 from remotedesktop.server import (
@@ -38,6 +48,7 @@ DEFAULT_PERFORMANCE_WINDOW_SECONDS = 120
 CLIPBOARD_SYNC_KEY = "clipboard_sync_enabled"
 REDUCE_EFFECTS_KEY = "reduce_effects_enabled"
 VIEWER_KEY = "viewer_enabled"
+AUTOSTART_MODE_KEY = "autostart_mode"
 THEME_KEY = "theme"
 THEME_SYSTEM = "system"  # follow the OS light/dark setting
 THEME_LIGHT = "light"
@@ -77,6 +88,12 @@ def apply_theme(theme: str) -> None:
 
 def load_viewer_enabled(settings: Settings) -> bool:
     return settings.get_bool(VIEWER_KEY, True)
+
+
+def load_autostart_mode(settings: Settings) -> str:
+    """The persisted start-at-login mode; minimized is the default."""
+    value = settings.get(AUTOSTART_MODE_KEY, START_MINIMIZED)
+    return value if value in START_MODES else START_MINIMIZED
 
 
 def load_performance_window_seconds(settings: Settings) -> int:
@@ -128,16 +145,51 @@ class PreferencesTab(QWidget):
             max(1, round(load_performance_window_seconds(settings) / 60))
         )
         self.history_minutes.valueChanged.connect(self._on_history_changed)
-        self.autostart_checkbox = QCheckBox("Start Remote Desktop when I log in to Windows")
-        self.autostart_checkbox.setToolTip(
+        # How (and whether) the app starts at login: a four-way start mode.
+        self.autostart_minimized_radio = QRadioButton("Start minimized (recommended)")
+        self.autostart_minimized_radio.setToolTip(
             "Registers this app in your Windows startup (per-user, no admin\n"
-            "rights) so it launches at login — minimized to the tray while\n"
-            "sharing is on, so sharing resumes after a reboot without\n"
-            "anyone having to launch the app."
+            "rights) so it launches at login minimized — straight to the\n"
+            "tray while sharing is on — so sharing resumes after a reboot\n"
+            "without anyone having to launch the app."
         )
-        self.autostart_checkbox.setChecked(self._autostart.is_enabled())
-        self.autostart_checkbox.setEnabled(self._autostart.available)
-        self.autostart_checkbox.toggled.connect(self._on_autostart_toggled)
+        self.autostart_normal_radio = QRadioButton("Start with a normal window")
+        self.autostart_normal_radio.setToolTip(
+            "Launches at login (per-user Windows startup, no admin rights)\n"
+            "with a normal window."
+        )
+        self.autostart_maximized_radio = QRadioButton("Start maximized")
+        self.autostart_maximized_radio.setToolTip(
+            "Launches at login (per-user Windows startup, no admin rights)\n"
+            "with a maximized window."
+        )
+        self.autostart_off_radio = QRadioButton("Do not start Remote Desktop")
+        self.autostart_off_radio.setToolTip(
+            "No startup registration: Remote Desktop only runs when you\n"
+            "launch it yourself."
+        )
+        self._autostart_radios = {
+            START_MINIMIZED: self.autostart_minimized_radio,
+            START_NORMAL: self.autostart_normal_radio,
+            START_MAXIMIZED: self.autostart_maximized_radio,
+            START_OFF: self.autostart_off_radio,
+        }
+        autostart_mode = load_autostart_mode(settings)
+        self._autostart_radios[autostart_mode].setChecked(True)
+        # Mirror the persisted choice into the Run key on every start, so the
+        # start-minimized default takes effect on a fresh install (and the
+        # registered path follows the current installation).
+        self._autostart.set_mode(autostart_mode)
+        for mode, radio in self._autostart_radios.items():
+            radio.setEnabled(self._autostart.available)
+            radio.toggled.connect(
+                lambda checked, m=mode: checked and self._on_autostart_mode_changed(m)
+            )
+        autostart_box = QWidget()
+        autostart_layout = QVBoxLayout(autostart_box)
+        autostart_layout.setContentsMargins(0, 0, 0, 0)
+        for radio in self._autostart_radios.values():
+            autostart_layout.addWidget(radio)
         self.clipboard_checkbox = QCheckBox("Sync clipboard with connected computers")
         self.clipboard_checkbox.setToolTip(
             "Text and images copied on this computer appear on connected\n"
@@ -254,7 +306,7 @@ class PreferencesTab(QWidget):
         layout.addRow("Performance history", self.history_minutes)
         layout.addRow(self.clipboard_checkbox)
         layout.addRow(self.reduce_effects_checkbox)
-        layout.addRow(self.autostart_checkbox)
+        layout.addRow("When I log in to Windows", autostart_box)
         layout.addRow(self.restart_button)
 
     def _on_history_changed(self, minutes: int) -> None:
@@ -263,12 +315,16 @@ class PreferencesTab(QWidget):
         for monitor in self._monitors:
             monitor.set_window_seconds(float(seconds))
 
-    def _on_autostart_toggled(self, checked: bool) -> None:
-        self._autostart.set_enabled(checked)
+    def _on_autostart_mode_changed(self, mode: str) -> None:
+        self._settings.set(AUTOSTART_MODE_KEY, mode)
+        self._autostart.set_mode(mode)
         self.statusMessage.emit(
-            "Remote Desktop will start at login"
-            if checked
-            else "Remote Desktop will no longer start at login"
+            {
+                START_MINIMIZED: "Remote Desktop will start minimized at login",
+                START_NORMAL: "Remote Desktop will start at login",
+                START_MAXIMIZED: "Remote Desktop will start maximized at login",
+                START_OFF: "Remote Desktop will no longer start at login",
+            }[mode]
         )
 
     def _on_viewer_toggled(self, checked: bool) -> None:
