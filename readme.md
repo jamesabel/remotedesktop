@@ -54,7 +54,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - ⌨️🖱️ **Full input control** — mouse, wheel, and keyboard forwarding that is safe against interruptions: anything still held down is released on the server if the viewer loses focus or disconnects, so no stuck keys. Prefer eyes-only? Choose *Shared, view only* and sharing becomes view-only, switchable live.
 - 🖲️ **Cursor shape mirroring** — the pointer is never burned into the captured frame; instead your own cursor takes the remote cursor's shape (an I-beam over text, resize arrows on a window edge), so it is always crisp and lag-free.
 - 🖼️ **View your way** — each connection scales to fit or shows the remote screen at 1:1 pixels with panning, and F11 goes full screen. While you type into a remote session every key is forwarded — F11 is the one key that stays local.
-- 📋 **Two-way clipboard** — text and images copied on either machine appear on the other; a Preferences toggle turns syncing off entirely.
+- 📋 **Two-way clipboard** — text, images, and files copied on either machine appear on the other (files up to 32 MB per copy, pasted as real local copies; folders aren't synced); a Preferences toggle turns syncing off entirely.
 - 📸 **Screen captures** — grab the remote screen at its full resolution and copy it to the clipboard or save it as a PNG, from the *Screen capture* panel buttons or the File menu.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 🔐 **Honest lock-screen behavior** — a locked server tells viewers so with a clear on-screen notice instead of a frozen frame, and streaming resumes by itself once someone signs in at the machine (see [The Windows lock screen](#the-windows-lock-screen)).
@@ -185,10 +185,17 @@ still held down (a dragged button, a modifier key) is released
 automatically if the viewer disconnects or loses focus.
 
 **Clipboard.** Both sides watch their local clipboard via Qt and forward
-copies (text, or images as PNG) over the same connection. Echo loops are
-prevented by content signature — an image is hashed by its canonical
-pixels, so a PNG that makes a round trip through the OS clipboard and
-comes back re-encoded is still recognized and not sent again.
+copies (text, images as PNG, or files) over the same connection. A file
+copy ships the file *contents* — a path would be meaningless on another
+machine — capped at 32 MB per copy so a transfer never chokes the screen
+stream; the receiving side materializes the files in a scratch folder and
+puts them on its clipboard, so pasting in Explorer produces real local
+copies (only the newest received batch is kept on disk; folders are
+skipped). Echo loops are prevented by content signature — an image is
+hashed by its canonical pixels and files by their names and contents (not
+their paths), so content that makes a round trip through the OS clipboard
+and comes back re-encoded or re-homed is still recognized and not sent
+again.
 
 **Transport.** Each client talks to the server over a single TCP
 connection: TLS via the Windows schannel backend with a self-signed

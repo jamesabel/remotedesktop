@@ -192,8 +192,9 @@ class PreferencesTab(QWidget):
             autostart_layout.addWidget(radio)
         self.clipboard_checkbox = QCheckBox("Sync clipboard with connected computers")
         self.clipboard_checkbox.setToolTip(
-            "Text and images copied on this computer appear on connected\n"
-            "computers, and theirs appear here.\n"
+            "Text, images, and files copied on this computer appear on\n"
+            "connected computers, and theirs appear here (files up to 32 MB\n"
+            "per copy; folders are not synced).\n"
             "Turn off to keep this computer's clipboard private — nothing\n"
             "is sent or applied in either direction."
         )
