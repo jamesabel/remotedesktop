@@ -1410,7 +1410,6 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     if not guard.acquire():
         # The running instance was asked to show itself; nothing to do here.
         raise SystemExit(0)
-    Autostart().migrate_legacy()  # pre-1.0 server-only registration
     window = MainWindow()
     guard.activateRequested.connect(window.bring_to_front)
     window.log(f"Detailed log: {log_path}")

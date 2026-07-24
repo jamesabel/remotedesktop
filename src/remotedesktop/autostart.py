@@ -9,10 +9,6 @@ instance goes straight to the tray), a normal window, maximized, or off
 (`--minimized`, no flag, `--maximized`), so the Run value alone says what
 happens at login. On non-Windows platforms this is an inert stub, like
 input injection.
-
-Installations upgraded from the separate server app may still carry the old
-"remotedesktop-server" Run value; `migrate_legacy()` (called once at app
-startup) moves that registration to the new value name and command.
 """
 
 import re
@@ -25,7 +21,6 @@ if _IS_WINDOWS:
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE_NAME = "remotedesktop"
-_LEGACY_VALUE_NAME = "remotedesktop-server"  # the pre-1.0 server-only app
 
 # How (and whether) the app starts at login.
 START_MINIMIZED = "minimized"  # the default and recommended mode
@@ -84,12 +79,10 @@ class Autostart:
         *,
         key_path: str = _RUN_KEY,
         value_name: str = _VALUE_NAME,
-        legacy_value_name: str = _LEGACY_VALUE_NAME,
     ) -> None:
         self.available = _IS_WINDOWS
         self._key_path = key_path
         self._value_name = value_name
-        self._legacy_value_name = legacy_value_name
 
     def _read_value(self, value_name: str) -> str | None:
         try:
@@ -98,9 +91,6 @@ class Autostart:
             return str(value)
         except OSError:
             return None
-
-    def _has_value(self, value_name: str) -> bool:
-        return self._read_value(value_name) is not None
 
     def _delete_value(self, value_name: str) -> None:
         try:
@@ -132,17 +122,3 @@ class Autostart:
             return
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, self._key_path) as key:
             winreg.SetValueEx(key, self._value_name, 0, winreg.REG_SZ, app_command(mode))
-        self._delete_value(self._legacy_value_name)  # never leave both
-
-    def migrate_legacy(self) -> None:
-        """Move a pre-1.0 "remotedesktop-server" registration to this app.
-
-        Best-effort: a registry failure must never block startup.
-        """
-        if not self.available:
-            return
-        try:
-            if self._has_value(self._legacy_value_name):
-                self.set_mode(START_MINIMIZED)
-        except OSError:
-            pass
