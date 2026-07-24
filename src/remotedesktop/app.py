@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from remotedesktop import __version__, compat, db, icon, logs, window_state
-from remotedesktop.about import AboutTab
+from remotedesktop.about import AboutDialog
 from remotedesktop.autostart import Autostart, installed_launcher
 from remotedesktop.client import DiscoveryPanel, ServerSession
 from remotedesktop.clipboard import ClipboardSync
@@ -381,11 +381,14 @@ class MainWindow(QMainWindow):
         self.preferences_tab.viewerModeChanged.connect(self._set_viewer_enabled)
         self.preferences_tab.reduceEffectsChanged.connect(self._on_reduce_effects_changed)
         self.preferences_tab.restart_button.clicked.connect(self._restart_app)
-        self._tabs.addTab(self.preferences_tab, "Preferences")
-        self._about_tab = AboutTab()
-        self._tabs.addTab(self._about_tab, "About")
-        # Only session tabs are closable; strip the buttons the fixed tabs
-        # got from setTabsClosable (styles place them on either side).
+        # Preferences is an on-demand closable tab (File ▸ Preferences…):
+        # the widget exists from startup — its constructor and signal wiring
+        # drive the roles — but it only occupies the tab bar while open.
+        # About is a Help-menu dialog; one instance, re-shown.
+        self._about_dialog = AboutDialog(self)
+        # Only session tabs (and the on-demand Preferences tab) are closable;
+        # strip the buttons the fixed tabs got from setTabsClosable (styles
+        # place them on either side).
         bar = self._tabs.tabBar()
         for index in range(self._tabs.count()):
             for side in (QTabBar.ButtonPosition.LeftSide, QTabBar.ButtonPosition.RightSide):
@@ -454,6 +457,10 @@ class MainWindow(QMainWindow):
         self.save_capture_action.triggered.connect(self._save_screen_capture)
         self.save_capture_action.setEnabled(False)
         self._file_menu.addSeparator()
+        self.preferences_action = self._file_menu.addAction("&Preferences…")
+        self.preferences_action.setShortcut(QKeySequence("Ctrl+,"))
+        self.preferences_action.triggered.connect(self._open_preferences)
+        self._file_menu.addSeparator()
         self.quit_action = self._file_menu.addAction("&Quit")
         self.quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         self.quit_action.triggered.connect(self._quit)
@@ -480,9 +487,7 @@ class MainWindow(QMainWindow):
         self.fullscreen_action.triggered.connect(self._toggle_fullscreen)
         self._help_menu = bar.addMenu("&Help")
         self.about_action = self._help_menu.addAction("&About")
-        self.about_action.triggered.connect(
-            lambda: self._tabs.setCurrentWidget(self._about_tab)
-        )
+        self.about_action.triggered.connect(self._about_dialog.open_)
         # Register shortcut actions on the window itself so they keep firing
         # when the menu bar is hidden (fullscreen). While a viewer has a
         # frame and focus, its ShortcutOverride handling forwards these keys
@@ -492,6 +497,7 @@ class MainWindow(QMainWindow):
             self.quit_action,
             self.refresh_action,
             self.fullscreen_action,
+            self.preferences_action,
         ):
             self.addAction(action)
 
@@ -506,7 +512,8 @@ class MainWindow(QMainWindow):
             "<p>Double-click one — or select it and click <b>Connect</b> — "
             "and this tab becomes your view of that computer.</p>"
             "<p>To make a computer appear in the list, enable "
-            "<b>Server (sharing)</b> in the Preferences tab on that computer.</p>"
+            "<b>Server (sharing)</b> under File&nbsp;▸&nbsp;Preferences on "
+            "that computer.</p>"
         )
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setWordWrap(True)
@@ -616,7 +623,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "close_tab_action", None) is None:
             return  # menus are built after the tabs
         session = self._session_for_page(self._tabs.currentWidget())
-        self.close_tab_action.setEnabled(session is not None)
+        self.close_tab_action.setEnabled(
+            session is not None or self._tabs.currentWidget() is self.preferences_tab
+        )
         self.fullscreen_action.setEnabled(session is not None)
         self.actual_size_action.setEnabled(session is not None)
         self.actual_size_action.setChecked(session.actual_size if session else False)
@@ -689,8 +698,25 @@ class MainWindow(QMainWindow):
         else:
             self.log(f"Could not save the screen capture to {path}")
 
+    def _open_preferences(self) -> None:
+        """File ▸ Preferences…: show the on-demand closable Preferences tab."""
+        if self._tabs.indexOf(self.preferences_tab) == -1:
+            self._tabs.addTab(self.preferences_tab, "Preferences")
+        self._tabs.setCurrentWidget(self.preferences_tab)
+
+    def _close_preferences_tab(self) -> None:
+        # removeTab never deletes the widget; the window keeps the reference
+        # (and all its signal wiring) for the next _open_preferences.
+        index = self._tabs.indexOf(self.preferences_tab)
+        if index != -1:
+            self._tabs.removeTab(index)
+
     def _close_current_session_tab(self) -> None:
-        session = self._session_for_page(self._tabs.currentWidget())
+        current = self._tabs.currentWidget()
+        if current is self.preferences_tab:
+            self._close_preferences_tab()
+            return
+        session = self._session_for_page(current)
         if session is not None:
             self._close_session(session)
 
@@ -1209,7 +1235,9 @@ class MainWindow(QMainWindow):
         self._sessions_source.notify()
 
     def _on_tab_close_requested(self, index: int) -> None:
-        if index < len(self._sessions):  # fixed tabs carry no close button
+        if self._tabs.widget(index) is self.preferences_tab:
+            self._close_preferences_tab()
+        elif index < len(self._sessions):  # fixed tabs carry no close button
             self._close_session(self._sessions[index])
 
     def _on_approval_pending(self, session: ServerSession) -> None:

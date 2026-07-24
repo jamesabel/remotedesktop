@@ -1,15 +1,21 @@
-"""The "About" tab of the app window.
+"""The "About" dialog (Help ▸ About).
 
 Shows the same metadata the PyPI page shows — summary, author, license,
 Python requirement, links — read from the installed package's metadata via
-importlib.metadata, with static fallbacks so the tab still renders in odd
+importlib.metadata, with static fallbacks so the page still renders in odd
 environments (the version always comes from `remotedesktop.__version__`,
 the single source hatchling packages)."""
 
 from importlib import metadata
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from remotedesktop import __version__, icon
 
@@ -36,7 +42,7 @@ def _field(name: str) -> str:
     return str(value) if value else _FALLBACKS.get(name, "")
 
 
-class AboutTab(QWidget):
+class AboutPage(QWidget):
     """Package metadata as a rich-text page with clickable links."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -70,3 +76,27 @@ class AboutTab(QWidget):
         layout.addWidget(logo)
         layout.addWidget(body)
         layout.addStretch(1)
+
+
+class AboutDialog(QDialog):
+    """Help ▸ About: the AboutPage in a modeless dialog with a Close button.
+
+    Modeless on purpose — like the rest of the app it stays usable from a
+    remote session, and it must never block streaming or approval prompts.
+    The window keeps one instance and re-shows it (`open_`).
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("About Remote Desktop")
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.close)
+        layout = QVBoxLayout(self)
+        layout.addWidget(AboutPage(self))
+        layout.addWidget(buttons)
+
+    def open_(self) -> None:
+        """Show (or re-raise) the dialog, modeless."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
