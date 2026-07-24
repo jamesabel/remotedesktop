@@ -60,6 +60,12 @@ upload = false
 # run_on_startup deliberately NOT set: it would write an HKLM Run value named
 # "remotedesktop", colliding with the app's own HKCU autostart preference.
 
+[tool.ruff.lint]
+# CI runs the latest ruff (uvx). Ruff 0.16 expanded its default rule set
+# (I, UP, RUF, S, BLE, ...), which the codebase was never linted against —
+# pin the selection to the historical defaults so unrelated PRs stay green.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ty.environment]
 # The app targets Windows (SendInput via ctypes.windll); type-check as such
 # even when ty runs on a Linux CI runner.
