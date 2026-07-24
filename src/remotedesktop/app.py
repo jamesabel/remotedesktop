@@ -1395,7 +1395,10 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:  # pragma: no cover - runs the Qt event loop
+    # The autostart registration passes one of these per the start mode
+    # chosen in Preferences (no flag means a normal window).
     minimized = "--minimized" in sys.argv[1:]
+    maximized = "--maximized" in sys.argv[1:]
     log_path = logs.init_logging("remotedesktop")
     icon.set_windows_app_id("remotedesktop")
     app = QApplication(sys.argv)
@@ -1414,6 +1417,11 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     if minimized and window.sharing_tab.serving and window._tray is not None:
         # Login-started while sharing: live in the tray until summoned.
         window._tray_notified = True  # no balloon for a start nobody clicked
+    elif minimized:
+        # Not sharing (or no tray): a minimized window on the taskbar.
+        window.showMinimized()
+    elif maximized:
+        window.showMaximized()
     else:
         window.show()
     raise SystemExit(app.exec())

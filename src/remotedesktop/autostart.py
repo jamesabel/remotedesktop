@@ -2,9 +2,13 @@
 
 Uses the per-user Run registry key (HKCU), so no administrator rights are
 needed and the app starts in the interactive session — which it needs,
-because approving a new client is a GUI prompt. Login-started instances get
-`--minimized`, so an instance that is sharing goes straight to the tray.
-On non-Windows platforms this is an inert stub, like input injection.
+because approving a new client is a GUI prompt. The registration is one of
+four *start modes*: minimized (the default and recommended — a sharing
+instance goes straight to the tray), a normal window, maximized, or off
+(no registration). The mode is encoded in the registered command line
+(`--minimized`, no flag, `--maximized`), so the Run value alone says what
+happens at login. On non-Windows platforms this is an inert stub, like
+input injection.
 
 Installations upgraded from the separate server app may still carry the old
 "remotedesktop-server" Run value; `migrate_legacy()` (called once at app
@@ -22,6 +26,20 @@ if _IS_WINDOWS:
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE_NAME = "remotedesktop"
 _LEGACY_VALUE_NAME = "remotedesktop-server"  # the pre-1.0 server-only app
+
+# How (and whether) the app starts at login.
+START_MINIMIZED = "minimized"  # the default and recommended mode
+START_NORMAL = "normal"
+START_MAXIMIZED = "maximized"
+START_OFF = "off"
+START_MODES = (START_MINIMIZED, START_NORMAL, START_MAXIMIZED, START_OFF)
+
+# The command-line suffix that makes a login-started instance open that way.
+_MODE_FLAGS = {
+    START_MINIMIZED: " --minimized",
+    START_NORMAL: "",
+    START_MAXIMIZED: " --maximized",
+}
 
 # A pyship CLIP directory: <install dir>\remotedesktop_<version>\pythonw.exe.
 _CLIP_DIR_RE = re.compile(r"remotedesktop_\d+(\.\d+)*", re.IGNORECASE)
@@ -42,16 +60,17 @@ def installed_launcher() -> Path | None:
     return None
 
 
-def app_command() -> str:
+def app_command(mode: str = START_MINIMIZED) -> str:
     """The command line that launches this installation at login."""
+    flag = _MODE_FLAGS[mode]
     launcher = installed_launcher()
     if launcher is not None:
-        return f'"{launcher}" --minimized'
+        return f'"{launcher}"{flag}'
     exe = Path(sys.executable).with_name("remotedesktop.exe")  # venv Scripts dir
     if exe.exists():
-        return f'"{exe}" --minimized'
+        return f'"{exe}"{flag}'
     # Fallback (e.g. running from source without the entry-point exe).
-    return f'"{sys.executable}" -m remotedesktop --minimized'
+    return f'"{sys.executable}" -m remotedesktop{flag}'
 
 
 class Autostart:
@@ -72,13 +91,16 @@ class Autostart:
         self._value_name = value_name
         self._legacy_value_name = legacy_value_name
 
-    def _has_value(self, value_name: str) -> bool:
+    def _read_value(self, value_name: str) -> str | None:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self._key_path) as key:
-                winreg.QueryValueEx(key, value_name)
-            return True
+                value, _kind = winreg.QueryValueEx(key, value_name)
+            return str(value)
         except OSError:
-            return False
+            return None
+
+    def _has_value(self, value_name: str) -> bool:
+        return self._read_value(value_name) is not None
 
     def _delete_value(self, value_name: str) -> None:
         try:
@@ -89,20 +111,28 @@ class Autostart:
         except OSError:
             pass  # already not registered
 
-    def is_enabled(self) -> bool:
+    def mode(self) -> str:
+        """The registered start mode, read back from the Run value's flag."""
         if not self.available:
-            return False
-        return self._has_value(self._value_name)
+            return START_OFF
+        command = self._read_value(self._value_name)
+        if command is None:
+            return START_OFF
+        if command.endswith("--minimized"):
+            return START_MINIMIZED
+        if command.endswith("--maximized"):
+            return START_MAXIMIZED
+        return START_NORMAL
 
-    def set_enabled(self, enabled: bool) -> None:
+    def set_mode(self, mode: str) -> None:
         if not self.available:
             return
-        if enabled:
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, self._key_path) as key:
-                winreg.SetValueEx(key, self._value_name, 0, winreg.REG_SZ, app_command())
-            self._delete_value(self._legacy_value_name)  # never leave both
-        else:
+        if mode == START_OFF:
             self._delete_value(self._value_name)
+            return
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, self._key_path) as key:
+            winreg.SetValueEx(key, self._value_name, 0, winreg.REG_SZ, app_command(mode))
+        self._delete_value(self._legacy_value_name)  # never leave both
 
     def migrate_legacy(self) -> None:
         """Move a pre-1.0 "remotedesktop-server" registration to this app.
@@ -113,6 +143,6 @@ class Autostart:
             return
         try:
             if self._has_value(self._legacy_value_name):
-                self.set_enabled(True)
+                self.set_mode(START_MINIMIZED)
         except OSError:
             pass
