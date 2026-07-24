@@ -41,6 +41,7 @@ from remotedesktop.config import (
     default_db_path,
     load_client_identity,
 )
+from remotedesktop.clipboard import describe_payload
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
 from remotedesktop import dxgi, frames
 from remotedesktop.input_injection import InputInjector
@@ -293,7 +294,10 @@ class ShareServer(QObject):
             return
         if message.get("type") == "clipboard":
             if stream in self._streams and self._clipboard is not None:
-                self.status.emit(f"Clipboard update received from {_peer(stream.socket)}")
+                self.status.emit(
+                    f"Clipboard received from {_peer(stream.socket)}: "
+                    f"{describe_payload(message)}"
+                )
                 self._clipboard.apply(message)
             return
         if message.get("type") == "log_request":
@@ -553,7 +557,10 @@ class ShareServer(QObject):
     def _broadcast_clipboard(self, payload: dict) -> None:
         if not self._streams:
             return
-        self.status.emit(f"Sending clipboard update to {len(self._streams)} viewer(s)")
+        self.status.emit(
+            f"Sending clipboard to {len(self._streams)} viewer(s): "
+            f"{describe_payload(payload)}"
+        )
         message = {"type": "clipboard", **payload}
         for stream in self._streams:
             stream.send_json(message)
@@ -855,7 +862,7 @@ class ShareClient(QObject):
 
     def _send_clipboard(self, payload: dict) -> None:
         if self._socket.state() == QSslSocket.SocketState.ConnectedState:
-            self.status.emit("Sending local clipboard to server")
+            self.status.emit(f"Sending clipboard to server: {describe_payload(payload)}")
             self._stream.send_json({"type": "clipboard", **payload})
 
     def request_log(self) -> None:
@@ -973,7 +980,9 @@ class ShareClient(QObject):
                 self.denied.emit(reason)
             case "clipboard":
                 if self._clipboard is not None:
-                    self.status.emit("Clipboard update received from server")
+                    self.status.emit(
+                        f"Clipboard received from server: {describe_payload(message)}"
+                    )
                     self._clipboard.apply(message)
             case "cursor":
                 # Too frequent for the status log; unknown names are the

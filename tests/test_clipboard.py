@@ -204,6 +204,19 @@ def test_data_changed_while_applying_is_ignored(qapp):
     assert emitted == []
 
 
+def test_describe_payload_summarizes_kinds_and_sizes():
+    from remotedesktop.clipboard import describe_payload
+
+    assert describe_payload({"text": "hello"}) == "text (5 chars)"
+    files = [{"name": "a.bin", "data": base64.b64encode(b"x" * 2048).decode()}]
+    assert describe_payload({"files": files}) == "1 file(s) (2 KB)"
+    both = {"text": "hi", "image_png": base64.b64encode(b"p" * 4096).decode()}
+    assert describe_payload(both) == "text (2 chars) + an image (4 KB PNG)"
+    assert describe_payload({"type": "clipboard"}) == "empty"
+    # Content never leaks into the log line.
+    assert "hello" not in describe_payload({"text": "hello"})
+
+
 # --- file sync ---
 
 
@@ -234,7 +247,8 @@ def test_file_copy_ships_names_and_contents(qapp, tmp_path):
     assert files == {"a.txt": b"alpha", "b.bin": b"\x00\x01\x02"}
     # Files travel alone: no stray text/image halves.
     assert "text" not in payload and "image_png" not in payload
-    assert any("sending 2 file(s)" in s for s in statuses)
+    # Routine traffic emits no status — the transport lines describe it.
+    assert statuses == []
 
 
 def test_file_copy_over_the_cap_is_skipped_with_a_message(qapp, tmp_path, monkeypatch):
@@ -270,7 +284,7 @@ def test_apply_files_materializes_and_does_not_echo(qapp, tmp_path):
     assert len(written) == 1 and written[0].endswith("doc.txt")
     assert Path(written[0]).read_bytes() == b"remote"
     assert Path(written[0]).parent.parent == tmp_path / "received"
-    assert any("received 1 file(s)" in s for s in statuses)
+    assert statuses == []  # routine receive: the transport line describes it
     for _ in range(10):
         qapp.processEvents()
     assert emitted == []  # the applied batch never echoes back to the peer

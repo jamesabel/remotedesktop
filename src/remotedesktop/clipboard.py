@@ -51,6 +51,32 @@ def default_files_dir() -> Path:
     return Path(platformdirs.user_data_dir("remotedesktop")) / "clipboard"
 
 
+def _human_size(count: int) -> str:
+    if count >= 1024 * 1024:
+        return f"{count / (1024 * 1024):.1f} MB"
+    return f"{max(1, count // 1024)} KB" if count >= 1024 else f"{count} bytes"
+
+
+def describe_payload(payload: dict) -> str:
+    """One human-readable phrase for a clipboard payload, e.g.
+    "text (14 chars)" or "2 file(s) (1.3 MB)" — content kinds and sizes,
+    never the content itself (this goes to the Connection log)."""
+    parts = []
+    text = payload.get("text")
+    if isinstance(text, str):
+        parts.append(f"text ({len(text)} chars)")
+    image = payload.get("image_png")
+    if isinstance(image, str):
+        parts.append(f"an image ({_human_size(len(image) * 3 // 4)} PNG)")
+    files = payload.get("files")
+    if isinstance(files, list) and files:
+        total = sum(
+            len(item.get("data", "")) for item in files if isinstance(item, dict)
+        )
+        parts.append(f"{len(files)} file(s) ({_human_size(total * 3 // 4)})")
+    return " + ".join(parts) or "empty"
+
+
 def _image_hash(image: QImage | None) -> str | None:
     if image is None or image.isNull():
         return None
@@ -83,7 +109,10 @@ class ClipboardSync(QObject):
     """Bridges the local clipboard to the network. See module docstring."""
 
     changed = Signal(dict)
-    status = Signal(str)  # human-readable, for the window's Connection log
+    # Problems only (skipped folders, over-cap batches, disk errors) — the
+    # transport's own status lines describe routine traffic, so a normal
+    # copy never produces two Connection-log lines.
+    status = Signal(str)
 
     def __init__(
         self,
@@ -184,10 +213,6 @@ class ClipboardSync(QObject):
                 {"name": name, "data": base64.b64encode(data).decode()}
                 for name, data in files
             ]
-            self.status.emit(
-                f"Clipboard sync: sending {len(files)} file(s) "
-                f"({sum(len(d) for _, d in files) // 1024} KB)"
-            )
         self.changed.emit(payload)
 
     def copy_image(self, image: QImage) -> None:
@@ -286,9 +311,6 @@ class ClipboardSync(QObject):
             written = self._write_files(files)
             if written is None:
                 return  # disk trouble; leave the clipboard alone
-            self.status.emit(
-                f"Clipboard sync: received {len(written)} file(s) — ready to paste"
-            )
         self._last_signature = signature
         # One QMimeData carrying both representations, so a payload with text
         # and an image keeps both halves on the receiving clipboard.
