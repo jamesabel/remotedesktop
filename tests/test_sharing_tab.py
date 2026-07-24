@@ -34,7 +34,7 @@ def make_tab(credentials, tmp_path, *, discovery_port=None, connect_port=0, enab
     connection = db.connect(tmp_path / "server.db")
     settings = Settings(connection)
     if enabled:
-        settings.set("server_enabled", "1")
+        settings.set("sharing_mode", "control")
     tab = HarnessTab(
         settings=settings,
         connection=connection,
@@ -93,7 +93,7 @@ def test_enabling_sharing_listens_and_is_discoverable(qapp, credentials, tmp_pat
         assert "Discoverable on this LAN" in tab._summary.text()
         assert "no viewers connected" in tab._summary.text()
         assert any("Discoverable as" in m for m in tab.messages)
-        assert tab._settings.get("server_enabled") == "1"
+        assert tab._settings.get("sharing_mode") == "control"
     finally:
         tab.shutdown()
 
@@ -126,7 +126,7 @@ def test_disabling_sharing_disconnects_viewers_and_stops_discovery(
         assert not tab.serving
         assert tab.share_server is None and tab.responder is None
         assert "Not sharing this computer's screen" in tab._summary.text()
-        assert tab._settings.get("server_enabled") == "0"
+        assert tab._settings.get("sharing_mode") == "off"
         assert tab.viewers_table.rowCount() == 0
 
         # Re-enabling shares again, and the paired client reconnects with its
@@ -410,7 +410,7 @@ def test_viewers_table_flags_a_major_version_mismatch(qapp):
 
 
 def test_sharing_mode_three_states_persist_and_apply(qapp, credentials, tmp_path):
-    from remotedesktop.server import ALLOW_INPUT_KEY
+    from remotedesktop.server import SHARING_MODE_KEY
 
     tab = make_tab(credentials, tmp_path, enabled=False)
     try:
@@ -419,7 +419,7 @@ def test_sharing_mode_three_states_persist_and_apply(qapp, credentials, tmp_path
         tab.set_mode("view")  # starts sharing, viewers watch only
         assert tab.serving
         assert tab.share_server._input_allowed is False
-        assert tab._settings.get(ALLOW_INPUT_KEY) == "0"
+        assert tab._settings.get(SHARING_MODE_KEY) == "view"
         assert tab.mode == "view"
 
         server_before = tab.share_server
@@ -437,8 +437,7 @@ def test_sharing_mode_three_states_persist_and_apply(qapp, credentials, tmp_path
         tab.set_mode("off")
         assert not tab.serving
         assert tab.mode == "off"
-        # The view-only preference survived turning sharing off.
-        assert tab._settings.get(ALLOW_INPUT_KEY) == "0"
+        assert tab._settings.get(SHARING_MODE_KEY) == "off"
     finally:
         tab.shutdown()
 

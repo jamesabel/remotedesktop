@@ -1,12 +1,11 @@
 """The serving role of the app: the Sharing tab.
 
-`SharingTab` is where an instance opts in to being a server: a checkbox
-starts/stops sharing this computer's screen on the LAN. It owns the
-`ShareServer` and `DiscoveryResponder` lifecycle — both exist only while
-sharing is enabled — and shows who is viewing (`ViewersTable`) and the app
-restart button. The opt-in persists in the settings table
-(`server_enabled`), so an instance that shared keeps sharing on the next
-start.
+`SharingTab` is where an instance opts in to being a server: the sharing
+mode chosen in Preferences starts/stops sharing this computer's screen on
+the LAN. It owns the `ShareServer` and `DiscoveryResponder` lifecycle —
+both exist only while sharing is enabled — and shows who is viewing
+(`ViewersTable`). The mode persists in the settings table (`sharing_mode`),
+so an instance that shared keeps sharing on the next start.
 """
 
 import logging
@@ -41,20 +40,17 @@ from remotedesktop.sharing import ShareServer
 
 _log = logging.getLogger("remotedesktop.server")
 
-# The three-state sharing mode, persisted as two settings keys (kept from
-# the two-checkbox era so existing installs migrate without ceremony).
+# The three-state sharing mode, persisted as a single settings key.
 SHARING_MODE_OFF = "off"
 SHARING_MODE_VIEW = "view"  # viewers can watch only
 SHARING_MODE_CONTROL = "control"  # viewers can watch and control
-ALLOW_INPUT_KEY = "allow_remote_input"
+SHARING_MODE_KEY = "sharing_mode"
+_SHARING_MODES = (SHARING_MODE_OFF, SHARING_MODE_VIEW, SHARING_MODE_CONTROL)
 
 
 def load_sharing_mode(settings: Settings) -> str:
-    if not settings.get_bool("server_enabled", False):
-        return SHARING_MODE_OFF
-    if settings.get_bool(ALLOW_INPUT_KEY, True):
-        return SHARING_MODE_CONTROL
-    return SHARING_MODE_VIEW
+    value = settings.get(SHARING_MODE_KEY, SHARING_MODE_OFF)
+    return value if value in _SHARING_MODES else SHARING_MODE_OFF
 
 
 class ViewersTable(QTableWidget):
@@ -250,18 +246,24 @@ class SharingTab(QWidget):
             if self.share_server is not None:
                 self.stop_sharing()
             else:
-                self._settings.set_bool("server_enabled", False)
+                self._settings.set(SHARING_MODE_KEY, SHARING_MODE_OFF)
             return
-        allowed = mode == SHARING_MODE_CONTROL
-        self._settings.set_bool(ALLOW_INPUT_KEY, allowed)
+        self._settings.set(SHARING_MODE_KEY, mode)
         if self.share_server is not None:
-            self.share_server.set_input_allowed(allowed)  # emits its status line
+            # Emits its own status line.
+            self.share_server.set_input_allowed(mode == SHARING_MODE_CONTROL)
             return
         self.start_sharing()
 
     def start_sharing(self) -> None:
         if self.share_server is not None:
             return
+        # A direct call with no persisted mode means full control (set_mode
+        # and restore_sharing arrive with the mode already persisted).
+        mode = load_sharing_mode(self._settings)
+        if mode == SHARING_MODE_OFF:
+            mode = SHARING_MODE_CONTROL
+        self._settings.set(SHARING_MODE_KEY, mode)
         # TLS credentials are created on first enable, not at construction:
         # a viewing-only instance never writes server_cert.pem.
         if self._credentials is None:
@@ -280,7 +282,7 @@ class SharingTab(QWidget):
             lock_probe=is_session_locked,
             performance=self._performance,
             log_provider=lambda: read_log_tail("remotedesktop"),
-            input_allowed=self._settings.get_bool(ALLOW_INPUT_KEY, True),
+            input_allowed=mode == SHARING_MODE_CONTROL,
             parent=self,
         )
         server.status.connect(self.statusMessage)
@@ -309,13 +311,12 @@ class SharingTab(QWidget):
                     f'Discoverable as "{self._name}" '
                     f"(UDP port {self._discovery_port}, TCP port {server.port})"
                 )
-        self._settings.set_bool("server_enabled", True)
         self._update_summary(0)
         self.sharingChanged.emit(self.serving)
 
     def stop_sharing(self) -> None:
         self._teardown()
-        self._settings.set_bool("server_enabled", False)
+        self._settings.set(SHARING_MODE_KEY, SHARING_MODE_OFF)
         self._update_summary(0)
         self.sharingChanged.emit(False)
 

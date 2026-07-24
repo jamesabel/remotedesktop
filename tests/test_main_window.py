@@ -51,7 +51,7 @@ def make_window(
     assert not serving or credentials is not None
     connection = db.connect(tmp_path / db_name)
     if serving:
-        Settings(connection).set("server_enabled", "1")
+        Settings(connection).set("sharing_mode", "control")
     if not viewer:
         Settings(connection).set("viewer_enabled", "0")
     return MainWindow(

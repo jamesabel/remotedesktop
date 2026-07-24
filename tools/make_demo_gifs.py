@@ -240,7 +240,7 @@ def main() -> None:
             key_path=r"Software\remotedesktop-tests\Demo", value_name="demo"
         )
         server_db = db.connect(tmp_path / "server.db")
-        Settings(server_db).set("server_enabled", "1")  # DEN-PC opts in to sharing
+        Settings(server_db).set("sharing_mode", "control")  # DEN-PC opts in to sharing
         server_window = MainWindow(
             connection=server_db,
             auto_scan=False,
@@ -252,7 +252,7 @@ def main() -> None:
         )
         desktop = SyntheticDesktop()
         share_server = server_window.sharing_tab.share_server
-        assert share_server is not None  # server_enabled was set above
+        assert share_server is not None  # sharing_mode was set above
         share_server._capture = desktop.grab  # the test seam  # ty: ignore[invalid-assignment]
 
         # A second, window-less server ("LAB-PC", teal desktop) so the client

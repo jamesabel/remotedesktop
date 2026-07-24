@@ -54,9 +54,6 @@ _log = logging.getLogger("remotedesktop.sharing")
 # Affordable since inter-frame compression: an unchanged screen costs only
 # a capture and a memory compare per tick — nothing is encoded or sent.
 DEFAULT_FPS = 30
-# Only for full frames to legacy (0.5.0) clients, which force-decode frames
-# as JPEG. Delta-capable clients get lossless PNG keyframes and delta bands.
-JPEG_QUALITY = 70
 # Skip sending to a client whose socket buffer is this far behind. Unsent
 # bytes are queued latency (the client renders them all before showing
 # anything current), so the cap is kept tight: ~160 ms of queue on 100 Mbit
@@ -160,11 +157,9 @@ class ShareServer(QObject):
         # Streams currently too far behind to receive frames (see
         # _broadcast_frame); entering/leaving this set emits a status message.
         self._backlogged: set[MessageStream] = set()
-        # Inter-frame compression state: which admitted streams understand
-        # delta frames (hello carried "delta": true), which need a full
-        # keyframe next broadcast (just admitted, just caught up after a
-        # backlog, or asked for one), and the previous capture to diff.
-        self._delta_capable: set[MessageStream] = set()
+        # Inter-frame compression state: which streams need a full keyframe
+        # next broadcast (just admitted, just caught up after a backlog, or
+        # asked for one), and the previous capture to diff.
         self._needs_keyframe: set[MessageStream] = set()
         # What each stream's hello said about the machine behind it
         # (name/user/host/os), for the server UI's viewers table.
@@ -246,7 +241,6 @@ class ShareServer(QObject):
         self._final.clear()
         self._pressed.clear()
         self._backlogged.clear()
-        self._delta_capable.clear()
         self._needs_keyframe.clear()
         self._viewer_info.clear()
         self._previous_frame = None
@@ -386,8 +380,6 @@ class ShareServer(QObject):
         client_id = message.get("client_id")
         client_name = str(message.get("name", "unknown"))
         self.status.emit(f'Hello from "{client_name}" ({client_id}) at {peer}')
-        if message.get("delta"):
-            self._delta_capable.add(stream)
         self._viewer_info[stream] = {
             "name": client_name,
             "address": peer,
@@ -596,7 +588,6 @@ class ShareServer(QObject):
         self._all_streams.discard(stream)
         self._prompting.discard(stream)
         self._backlogged.discard(stream)
-        self._delta_capable.discard(stream)
         self._needs_keyframe.discard(stream)
         self._viewer_info.pop(stream, None)
         self._release_input(stream)
@@ -734,7 +725,6 @@ class ShareServer(QObject):
             )
         self._previous_frame = image
         # Encode each variant at most once per tick, shared by all takers.
-        legacy_jpeg: bytes | None = None
         keyframe_png: bytes | None = None
         delta_payload: bytes | None = None
         for stream in self._streams:
@@ -757,12 +747,7 @@ class ShareServer(QObject):
                 self.status.emit(
                     f"Viewer at {_peer(stream.socket)} caught up — resuming frames"
                 )
-            if stream not in self._delta_capable:
-                # Legacy (0.5.0) client: full JPEG every tick, as before.
-                if legacy_jpeg is None:
-                    legacy_jpeg = frames.encode_image(image, "JPEG", JPEG_QUALITY)
-                stream.send_frame(legacy_jpeg)
-            elif stream in self._needs_keyframe or bands is None:
+            if stream in self._needs_keyframe or bands is None:
                 if keyframe_png is None:
                     keyframe_png = frames.encode_image(image, "PNG", frames.PNG_QUALITY)
                     _log.debug("Keyframe: %d KB PNG", len(keyframe_png) // 1024)
@@ -917,7 +902,6 @@ class ShareClient(QObject):
             "version": PROTOCOL_VERSION,
             "client_id": self._client_id,
             "name": self._name,
-            "delta": True,  # we understand inter-frame delta messages
             "app_version": __version__,
             **_client_details(),
         }
@@ -1022,8 +1006,7 @@ class ShareClient(QObject):
                 self.logReceived.emit(text)
 
     def _on_frame(self, data: bytes) -> None:
-        # Full frame — PNG keyframe or (legacy servers) JPEG; sniffed from
-        # the payload's magic bytes.
+        # A full-frame PNG keyframe (fromData sniffs the format).
         image = QImage.fromData(data)
         if image.isNull():
             self.status.emit(f"Received undecodable frame ({len(data)} bytes)")
