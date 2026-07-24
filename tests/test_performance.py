@@ -467,8 +467,8 @@ def test_rate_unit_matches_format_rate_unit():
     assert rate_unit(500.0) == 1.0
     assert rate_unit(2048.0) == 1024.0
     assert rate_unit(3 * 1024 * 1024) == 1024.0 * 1024.0
-    # A round tick count in the displayed unit: 70000 B/s displays in KB/s,
-    # and the resulting ceiling is 100 KB/s exactly.
+    # A round tick count in the displayed unit: 70000 bytes/s displays in
+    # KiB/s, and the resulting ceiling is 100 KiB/s exactly.
     unit = rate_unit(70000.0)
     assert unit * nice_ceiling(70000.0 / unit) == 100.0 * 1024.0
 

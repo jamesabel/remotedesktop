@@ -209,9 +209,9 @@ def test_describe_payload_summarizes_kinds_and_sizes():
 
     assert describe_payload({"text": "hello"}) == "text (5 chars)"
     files = [{"name": "a.bin", "data": base64.b64encode(b"x" * 2048).decode()}]
-    assert describe_payload({"files": files}) == "1 file(s) (2 KB)"
+    assert describe_payload({"files": files}) == "1 file(s) (2.0 KiB)"
     both = {"text": "hi", "image_png": base64.b64encode(b"p" * 4096).decode()}
-    assert describe_payload(both) == "text (2 chars) + an image (4 KB PNG)"
+    assert describe_payload(both) == "text (2 chars) + an image (4.0 KiB PNG)"
     assert describe_payload({"type": "clipboard"}) == "empty"
     # Content never leaks into the log line.
     assert "hello" not in describe_payload({"text": "hello"})

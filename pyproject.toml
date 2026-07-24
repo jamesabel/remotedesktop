@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "cryptography>=49.0.0",
+    "humanize>=4.0",
     "platformdirs>=4.10.0",
     "pyside6>=6.11.1",
     "semver>=3.0",

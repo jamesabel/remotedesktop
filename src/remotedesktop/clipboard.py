@@ -33,6 +33,7 @@ import shutil
 import uuid
 from pathlib import Path
 
+import humanize
 import platformdirs
 from PySide6.QtCore import QBuffer, QMimeData, QObject, QUrl, Signal
 from PySide6.QtGui import QClipboard, QGuiApplication, QImage
@@ -51,15 +52,9 @@ def default_files_dir() -> Path:
     return Path(platformdirs.user_data_dir("remotedesktop")) / "clipboard"
 
 
-def _human_size(count: int) -> str:
-    if count >= 1024 * 1024:
-        return f"{count / (1024 * 1024):.1f} MB"
-    return f"{max(1, count // 1024)} KB" if count >= 1024 else f"{count} bytes"
-
-
 def describe_payload(payload: dict) -> str:
     """One human-readable phrase for a clipboard payload, e.g.
-    "text (14 chars)" or "2 file(s) (1.3 MB)" — content kinds and sizes,
+    "text (14 chars)" or "2 file(s) (1.3 MiB)" — content kinds and sizes,
     never the content itself (this goes to the Connection log)."""
     parts = []
     text = payload.get("text")
@@ -67,13 +62,15 @@ def describe_payload(payload: dict) -> str:
         parts.append(f"text ({len(text)} chars)")
     image = payload.get("image_png")
     if isinstance(image, str):
-        parts.append(f"an image ({_human_size(len(image) * 3 // 4)} PNG)")
+        size = humanize.naturalsize(len(image) * 3 // 4, binary=True)
+        parts.append(f"an image ({size} PNG)")
     files = payload.get("files")
     if isinstance(files, list) and files:
         total = sum(
             len(item.get("data", "")) for item in files if isinstance(item, dict)
         )
-        parts.append(f"{len(files)} file(s) ({_human_size(total * 3 // 4)})")
+        size = humanize.naturalsize(total * 3 // 4, binary=True)
+        parts.append(f"{len(files)} file(s) ({size})")
     return " + ".join(parts) or "empty"
 
 
@@ -160,8 +157,9 @@ class ClipboardSync(QObject):
             return None
         if total > FILES_CAP_BYTES:
             self.status.emit(
-                f"Clipboard sync: files not synced — {total // (1024 * 1024)} MB "
-                f"exceeds the {FILES_CAP_BYTES // (1024 * 1024)} MB limit"
+                "Clipboard sync: files not synced — "
+                f"{humanize.naturalsize(total, binary=True)} exceeds the "
+                f"{humanize.naturalsize(FILES_CAP_BYTES, binary=True)} limit"
             )
             return None
         entries: list[tuple[str, bytes]] = []
