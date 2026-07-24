@@ -368,7 +368,7 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
     table.set_share_server(FakeShareServer([viewer]))
     widths = [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS]
     assert all(w > 0 for w in widths)
-    # Values swinging from B/s to hundreds of MB/s must not move the columns.
+    # Values swinging from Bytes/s to hundreds of MiB/s must not move the columns.
     rtt_series = MetricSeries(120.0)
     rtt_series.add(2.1)
     monitor._stream_send_bps[stream] = 312.0
@@ -381,7 +381,7 @@ def test_viewers_table_metric_columns_keep_constant_width(qapp):
     table.refresh()
     assert [table.columnWidth(c) for c in ViewersTable._METRIC_COLUMNS] == widths
     send_item = table.item(0, ViewersTable._RATE_COLUMNS[0])
-    assert send_item is not None and send_item.text() == "250.0 MB/s"
+    assert send_item is not None and send_item.text() == "250.0 MiB/s"
 
 
 def test_viewers_table_flags_a_major_version_mismatch(qapp):

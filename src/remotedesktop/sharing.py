@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable
 from typing import cast
 
+import humanize
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtNetwork import (
@@ -311,7 +312,7 @@ class ShareServer(QObject):
                 name = self._stream_key.get(stream, ("", "", ""))[1]
                 self.status.emit(
                     f'Received log from "{name or _peer(stream.socket)}" '
-                    f"({len(text) // 1024} KB)"
+                    f"({humanize.naturalsize(len(text), binary=True)})"
                 )
                 self.logReceived.emit(name, text)
             return
@@ -582,7 +583,8 @@ class ShareServer(QObject):
             else "(no log available on the server)"
         )
         self.status.emit(
-            f"Log requested by {_peer(stream.socket)} — sending {len(text) // 1024} KB"
+            f"Log requested by {_peer(stream.socket)} — "
+            f"sending {humanize.naturalsize(len(text), binary=True)}"
         )
         stream.send_json({"type": "log", "text": text})
 
@@ -743,10 +745,12 @@ class ShareServer(QObject):
                 self._needs_keyframe.add(stream)
                 if stream not in self._backlogged:
                     self._backlogged.add(stream)
+                    unsent = humanize.naturalsize(
+                        stream.socket.bytesToWrite(), binary=True
+                    )
                     self.status.emit(
                         f"Viewer at {_peer(stream.socket)} is not keeping up "
-                        f"({stream.socket.bytesToWrite() // 1024} KB unsent) — "
-                        "dropping frames for it"
+                        f"({unsent} unsent) — dropping frames for it"
                     )
                 continue
             if stream in self._backlogged:
@@ -757,7 +761,10 @@ class ShareServer(QObject):
             if stream in self._needs_keyframe or bands is None:
                 if keyframe_png is None:
                     keyframe_png = frames.encode_image(image, "PNG", frames.PNG_QUALITY)
-                    _log.debug("Keyframe: %d KB PNG", len(keyframe_png) // 1024)
+                    _log.debug(
+                        "Keyframe: %s PNG",
+                        humanize.naturalsize(len(keyframe_png), binary=True),
+                    )
                 stream.send_frame(keyframe_png)
                 self._needs_keyframe.discard(stream)
             elif bands:
@@ -1006,12 +1013,16 @@ class ShareClient(QObject):
                     else "(no log available on the client)"
                 )
                 self.status.emit(
-                    f"Server requested this client's log — sending {len(text) // 1024} KB"
+                    "Server requested this client's log — "
+                    f"sending {humanize.naturalsize(len(text), binary=True)}"
                 )
                 self._stream.send_json({"type": "log", "text": text})
             case "log":
                 text = str(message.get("text", ""))
-                self.status.emit(f"Received the server's log ({len(text) // 1024} KB)")
+                self.status.emit(
+                    "Received the server's log "
+                    f"({humanize.naturalsize(len(text), binary=True)})"
+                )
                 self.logReceived.emit(text)
 
     def _on_frame(self, data: bytes) -> None:
@@ -1040,17 +1051,17 @@ class ShareClient(QObject):
             self._got_first_frame = True
             self.status.emit(
                 f"First frame received: {image.width()}x{image.height()} "
-                f"({byte_count // 1024} KB)"
+                f"({humanize.naturalsize(byte_count, binary=True)})"
             )
         self._frame_count += 1
         # A heartbeat in the debug log (~10 s at the default fps): gaps between
         # these lines show exactly when the stream stalled.
         if self._frame_count % 100 == 0:
             _log.debug(
-                "Received %d frames (latest %dx%d, %d KB)",
+                "Received %d frames (latest %dx%d, %s)",
                 self._frame_count,
                 image.width(),
                 image.height(),
-                byte_count // 1024,
+                humanize.naturalsize(byte_count, binary=True),
             )
         self.frameReceived.emit(image)

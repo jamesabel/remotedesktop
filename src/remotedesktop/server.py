@@ -88,10 +88,11 @@ class ViewersTable(QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
-        # Sized to realistic maxima ("999.9 MB/s" saturates a LAN; RTTs over
+        # Sized to realistic maxima ("1023.9 MiB/s" is humanize's widest
+        # sub-GiB rate and far past LAN saturation; RTTs over
         # a second are already hopeless) with slim padding — the metric
         # columns don't deserve more width than the identity ones.
-        rate_width = self.fontMetrics().horizontalAdvance("999.9 MB/s") + 12
+        rate_width = self.fontMetrics().horizontalAdvance("1023.9 MiB/s") + 12
         ms_width = self.fontMetrics().horizontalAdvance("999.9 ms") + 12
         for column in self._METRIC_COLUMNS:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)

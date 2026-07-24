@@ -36,6 +36,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Protocol
 
+import humanize
 from PySide6.QtCore import QObject, QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen, QPolygonF, QShowEvent
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -340,9 +341,9 @@ class PerformanceMonitor(QObject):
         self._tick_count += 1
         if self._tick_count % _HEARTBEAT_TICKS == 0:
             _log.debug(
-                "send %.1f KB/s, recv %.1f KB/s, rtt %s, peer rtt %s, %d stream(s)",
-                (self.send_bps.latest() or 0.0) / 1024,
-                (self.recv_bps.latest() or 0.0) / 1024,
+                "send %s, recv %s, rtt %s, peer rtt %s, %d stream(s)",
+                format_rate(self.send_bps.latest() or 0.0),
+                format_rate(self.recv_bps.latest() or 0.0),
                 f"{rtt:.1f} ms" if (rtt := self.rtt_ms.latest()) is not None else "n/a",
                 f"{peer:.1f} ms" if (peer := self.peer_rtt_ms.latest()) is not None else "n/a",
                 len(self._streams),
@@ -351,11 +352,7 @@ class PerformanceMonitor(QObject):
 
 
 def format_rate(bytes_per_second: float) -> str:
-    if bytes_per_second >= 1024 * 1024:
-        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
-    if bytes_per_second >= 1024:
-        return f"{bytes_per_second / 1024:.1f} KB/s"
-    return f"{bytes_per_second:.0f} B/s"
+    return f"{humanize.naturalsize(bytes_per_second, binary=True)}/s"
 
 
 def format_ms(ms: float) -> str:
@@ -363,9 +360,9 @@ def format_ms(ms: float) -> str:
 
 
 def rate_unit(bytes_per_second: float) -> float:
-    """The divisor format_rate will display this value in (B/KB/MB per s),
-    so axis ticks can be computed in the displayed unit and land on round
-    numbers there."""
+    """The divisor format_rate will display this value in (Bytes/KiB/MiB
+    per s — humanize's binary thresholds), so axis ticks can be computed in
+    the displayed unit and land on round numbers there."""
     if bytes_per_second >= 1024 * 1024:
         return 1024.0 * 1024.0
     if bytes_per_second >= 1024:
