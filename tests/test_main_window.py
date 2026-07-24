@@ -124,8 +124,12 @@ def test_window_starts_disconnected_and_not_sharing(qapp, tmp_path):
         assert "Remote Desktop started" in window.connection_log.toPlainText()
         tabs = window.centralWidget()
         labels = [tabs.tabText(i) for i in range(tabs.count())]
-        for expected in ("Server", "Connections", "Performance", "Preferences", "About"):
+        for expected in ("Server", "Connections", "Performance"):
             assert expected in labels
+        # Preferences is an on-demand tab (File ▸ Preferences…) and About is
+        # a Help-menu dialog — neither is pinned.
+        assert "Preferences" not in labels
+        assert "About" not in labels
         assert "Connection log" not in labels  # folded into Connections
         # With no connection, tab 0 is the "Server" instructions placeholder,
         # and it is the landing tab.
@@ -739,15 +743,45 @@ def test_menu_bar_quit_and_about(qapp, tmp_path, monkeypatch):
         assert [a.text() for a in window.menuBar().actions()] == ["&File", "&View", "&Help"]
         file_actions = _menu_actions(window, "&File")
         assert "&Restart app…" in file_actions
+        assert "&Preferences…" in file_actions
 
         _menu_actions(window, "&Help")["&About"].trigger()
-        tabs = window.centralWidget()
-        assert tabs.tabText(tabs.currentIndex()) == "About"
+        assert window._about_dialog.isVisible()  # a dialog, not a tab
+        window._about_dialog.close()
 
         quits = []
         monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
         file_actions["&Quit"].trigger()
         assert quits == [True]
+    finally:
+        window.close()
+
+
+def test_preferences_is_an_on_demand_closable_tab(qapp, tmp_path):
+    window = make_window(tmp_path)
+    try:
+        tabs = window.centralWidget()
+        assert tabs.indexOf(window.preferences_tab) == -1  # not pinned
+
+        window.preferences_action.trigger()
+        index = tabs.indexOf(window.preferences_tab)
+        assert index != -1 and tabs.currentWidget() is window.preferences_tab
+        assert window.close_tab_action.isEnabled()  # Ctrl+W closes it too
+
+        # The tab-bar close button removes the tab but keeps the widget (and
+        # its wiring) for the next open.
+        tabs.tabCloseRequested.emit(index)
+        assert tabs.indexOf(window.preferences_tab) == -1
+        window.preferences_action.trigger()
+        assert tabs.currentWidget() is window.preferences_tab
+
+        # Ctrl+W (the File ▸ Close tab action) closes it as well, and the
+        # widget's wiring still drives the window afterwards.
+        window.close_tab_action.trigger()
+        assert tabs.indexOf(window.preferences_tab) == -1
+        window.preferences_tab.viewer_checkbox.setChecked(False)
+        assert not window.refresh_action.isEnabled()  # wiring still live
+        window.preferences_tab.viewer_checkbox.setChecked(True)
     finally:
         window.close()
 
