@@ -62,7 +62,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Connections that were open when the app closed are restored on the next start.
 - 🚀 **Hands-off operation** — start-at-login (per-user, no admin rights) with a choice of minimized (the default and recommended — sharing resumes after a reboot with no clicks), normal, maximized, or not starting at all; close-to-tray while sharing (the screen stays available with the window closed); and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
 - 🗃️ **Persistent peer inventory** — a SQLite-backed history of every peer seen on the LAN, with one-click *Revoke* / *Forget*.
-- 🧭 **Desktop-app niceties** — a real menu bar with standard shortcuts, a status-bar sharing indicator, a confirmation before quitting with viewers connected, and window/panel layout that persists across restarts.
+- 🧭 **Desktop-app niceties** — a real menu bar with standard shortcuts (Preferences on *File ▸ Preferences*, Ctrl+,; About on the Help menu), a status-bar sharing indicator, a confirmation before quitting with viewers connected, and window/panel layout that persists across restarts.
 
 In scope: screen, keyboard, mouse, and clipboard. Out of scope: shared
 drives, devices, and audio — and smooth playback of fast-changing
@@ -94,8 +94,8 @@ it prepares the environment on first use and launches the app.
 ## Quick start
 
 1. Run `remotedesktop` on both computers.
-2. On the computer to share, open *Preferences* and set *Server (sharing)*
-   to one of the *Shared* modes.
+2. On the computer to share, open *File ▸ Preferences* (Ctrl+,) and set
+   *Server (sharing)* to one of the *Shared* modes.
 3. On the viewing computer, the shared computer appears in the panel on
    the left — double-click it (or select it and click *Connect*).
 4. Approve the connection in the dialog that pops up on the shared
