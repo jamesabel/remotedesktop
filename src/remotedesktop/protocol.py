@@ -1,8 +1,8 @@
 """Length-prefixed message framing over a QTcpSocket.
 
 Wire format: a 4-byte big-endian payload length, one kind byte (JSON control
-message or JPEG screen frame), then the payload. Malformed or oversized
-input aborts the connection.
+message, full screen frame, or inter-frame delta), then the payload.
+Malformed or oversized input aborts the connection.
 """
 
 import json

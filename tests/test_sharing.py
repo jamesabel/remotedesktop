@@ -554,26 +554,6 @@ def test_delta_streaming_sends_only_changes(qapp, credentials, tmp_path):
         server.close()
 
 
-def test_legacy_client_still_gets_full_jpeg_frames(qapp, credentials, tmp_path):
-    server = make_server(credentials, tmp_path, approve=lambda *_: True)
-    server._capture = lambda: solid_image("red")  # static screen
-    sock, stream = raw_tls_stream(qapp, server.port)
-    received = []
-    stream.frameReceived.connect(received.append)
-    # A 0.5.0 hello has no "delta" capability flag.
-    stream.send_json(
-        {"type": "hello", "version": PROTOCOL_VERSION, "client_id": "legacy-1", "name": "old"}
-    )
-    try:
-        # Legacy clients get a full frame every tick even with a static
-        # screen, and it must be JPEG (0.5.0 force-decodes frames as JPEG).
-        pump(qapp, lambda: len(received) >= 3)
-        assert all(frame[:3] == b"\xff\xd8\xff" for frame in received)
-    finally:
-        sock.abort()
-        server.close()
-
-
 def test_desynced_client_requests_and_gets_a_keyframe(qapp, credentials, tmp_path):
     server = make_server(credentials, tmp_path, approve=lambda *_: True)
     captures = {"image": solid_image("red")}

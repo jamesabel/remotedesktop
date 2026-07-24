@@ -181,8 +181,7 @@ def test_theme_radio_persists_and_applies_live(qapp, tmp_path):
 
 def test_sharing_mode_radios_reflect_persisted_state_and_emit(qapp, tmp_path):
     settings = Settings(db.connect(tmp_path / "prefs.db"))
-    settings.set("server_enabled", "1")
-    settings.set("allow_remote_input", "0")
+    settings.set("sharing_mode", "view")
     tab = PreferencesTab(settings, PerformanceMonitor(), autostart=make_autostart())
     assert tab.sharing_view_radio.isChecked()  # persisted: shared, view only
     modes = []

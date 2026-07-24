@@ -6,10 +6,8 @@ in a delta payload, which the client patches onto its previous frame. Bands
 keep the comparison and the crop cheap: a band is a contiguous byte range of
 the image, so diffing is a C-speed memoryview compare.
 
-Delta bands and keyframes for delta-capable clients are PNG — lossless, so
-the client's canvas is pixel-identical to the capture and patches never
-accumulate artifacts. (Legacy clients still get JPEG full frames: 0.5.0
-force-decodes frames as JPEG, so they must never see PNG.)
+Delta bands and keyframes are PNG — lossless, so the client's canvas is
+pixel-identical to the capture and patches never accumulate artifacts.
 
 Delta payload wire format: 4-byte big-endian header length, a JSON header
 {"w", "h", "bands": [{"y", "h", "len"}, ...]}, then the bands' PNG bytes
