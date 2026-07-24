@@ -22,12 +22,9 @@ _TEST_KEY = r"Software\remotedesktop-tests\Run"
 
 @pytest.fixture
 def autostart():
-    instance = Autostart(
-        key_path=_TEST_KEY, value_name="test-app", legacy_value_name="test-legacy"
-    )
+    instance = Autostart(key_path=_TEST_KEY, value_name="test-app")
     yield instance
     instance.set_mode(START_OFF)
-    instance._delete_value("test-legacy")
 
 
 def test_mode_round_trip(autostart):
@@ -94,44 +91,6 @@ def test_non_clip_layout_is_not_mistaken_for_an_install(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "executable", str(python))
     assert installed_launcher() is None
     assert app_command(START_MINIMIZED) == f'"{python}" -m remotedesktop --minimized'
-
-
-def test_legacy_server_registration_migrates(autostart):
-    import winreg
-
-    # Simulate a pre-1.0 install that had the server-only app registered.
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
-        winreg.SetValueEx(key, "test-legacy", 0, winreg.REG_SZ, '"old-server.exe"')
-    autostart.migrate_legacy()
-    assert autostart.mode() == START_MINIMIZED  # re-registered under the new name
-    assert not autostart._has_value("test-legacy")  # old value removed
-
-
-def test_migrate_without_legacy_value_changes_nothing(autostart):
-    autostart.migrate_legacy()
-    assert autostart.mode() == START_OFF
-
-
-def test_enabling_clears_a_lingering_legacy_value(autostart):
-    import winreg
-
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
-        winreg.SetValueEx(key, "test-legacy", 0, winreg.REG_SZ, '"old-server.exe"')
-    autostart.set_mode(START_MINIMIZED)
-    assert autostart.mode() == START_MINIMIZED
-    assert not autostart._has_value("test-legacy")
-
-
-def test_pre_mode_registration_reads_as_minimized(autostart):
-    import winreg
-
-    # An install upgraded from the checkbox era: the old value always carried
-    # --minimized, so it must read back as the minimized mode.
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _TEST_KEY) as key:
-        winreg.SetValueEx(
-            key, "test-app", 0, winreg.REG_SZ, '"C:\\old\\remotedesktop.exe" --minimized'
-        )
-    assert autostart.mode() == START_MINIMIZED
 
 
 def test_unavailable_autostart_is_inert(autostart):
