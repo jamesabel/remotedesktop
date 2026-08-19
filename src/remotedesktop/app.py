@@ -15,7 +15,9 @@ import logging
 import re
 import sqlite3
 import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QStandardPaths, Qt, QTimer, Signal
@@ -45,10 +47,15 @@ from PySide6.QtWidgets import (
 from remotedesktop import __version__, compat, db, icon, logs, window_state
 from remotedesktop.about import AboutDialog
 from remotedesktop.autostart import Autostart, installed_launcher
-from remotedesktop.client import DiscoveryPanel, ServerSession
+from remotedesktop.client import DiscoveryPanel, ServerSession, _broadcast_hosts
 from remotedesktop.clipboard import ClipboardSync
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
-from remotedesktop.discovery import DEFAULT_CONNECT_PORT, DISCOVERY_PORT, ServerInfo
+from remotedesktop.discovery import (
+    DEFAULT_CONNECT_PORT,
+    DISCOVERY_PORT,
+    ServerInfo,
+    discover_servers,
+)
 from remotedesktop.inventory import ConnectionInventory, InventoryTab
 from remotedesktop.logs import PeerLogDialog, read_log_tail
 from remotedesktop.modal_loop import HTCLOSE, HTMAXBUTTON, HTMINBUTTON, ModalLoopPump
@@ -72,6 +79,14 @@ _log = logging.getLogger("remotedesktop.app")
 
 # Auto-reconnect backoff never waits longer than this between attempts.
 _RECONNECT_CAP_SECONDS = 30.0
+
+# Once this many direct reconnect attempts at the last known address have
+# failed, each further failure also starts a discovery scan: the server may
+# have come back on a different address (DHCP after a reboot), and sessions,
+# tokens, and pins are all keyed by host:port. A re-discovered server is
+# matched by certificate fingerprint (name as the fallback) and the session
+# migrates to the new address — token included, so no re-approval.
+_REDISCOVER_AFTER_ATTEMPTS = 2
 
 
 class _SessionsTable(ViewersTable):
@@ -121,6 +136,9 @@ class _ConnectedServersSource(QObject):
 
 
 class MainWindow(QMainWindow):
+    # A re-discovery scan finished on its worker thread: (session, servers).
+    _rediscoveryFinished = Signal(object, list)
+
     def __init__(
         self,
         *,
@@ -132,10 +150,19 @@ class MainWindow(QMainWindow):
         connect_port: int = DEFAULT_CONNECT_PORT,
         tray_available: bool | None = None,
         reconnect_base_seconds: float = 2.0,
+        rediscover: Callable[[], list[ServerInfo]] | None = None,
         effects_reducer: VisualEffectsReducer | None = None,
     ) -> None:
         super().__init__()
         self._reconnect_base = reconnect_base_seconds
+        # The blocking scan auto-reconnect uses to find a moved server; tests
+        # inject a fake so window tests never broadcast on the LAN.
+        self._rediscover = (
+            rediscover
+            if rediscover is not None
+            else lambda: discover_servers(broadcast_hosts=_broadcast_hosts())
+        )
+        self._rediscoveryFinished.connect(self._on_rediscovery_finished)
         self._auto_scan = auto_scan
         self.setWindowIcon(icon.app_icon("app"))
         # Tests inject a connection to a temp database; the app uses the default.
@@ -1370,6 +1397,10 @@ class MainWindow(QMainWindow):
         session.viewer.clear(message)
         self._set_session_status(session, f"{session.name}: {message}")
         self.log(f"[{session.name}] {message}")
+        # The direct address keeps failing — the server may be back under a
+        # different one. Scan alongside the backoff timer, not instead of it.
+        if session.reconnect_attempts >= _REDISCOVER_AFTER_ATTEMPTS:
+            self._start_rediscovery(session)
 
     def _attempt_reconnect(self, session: ServerSession) -> None:
         if (
@@ -1391,6 +1422,104 @@ class MainWindow(QMainWindow):
         if session.reconnect_timer is not None:
             session.reconnect_timer.stop()
         session.reconnect_attempts = 0
+
+    # -------------------------------------------- reconnect re-discovery
+
+    def _start_rediscovery(self, session: ServerSession) -> None:
+        """Scan the LAN for a server that moved to a new address.
+
+        Runs the blocking scan on a worker thread (the DiscoveryPanel
+        pattern) and delivers the result through a queued signal. This is
+        not background polling: it only runs while a session is actively
+        failing to reconnect, and stops the moment it succeeds.
+        """
+        if session.rediscovering:
+            return
+        session.rediscovering = True
+        _log.debug("Re-discovery scan for %s (%s)", session.name, session.key)
+        scan = self._rediscover
+
+        def run() -> None:
+            try:
+                servers = scan()
+            except OSError as error:
+                _log.warning("Re-discovery scan failed: %s", error)
+                servers = []
+            try:
+                self._rediscoveryFinished.emit(session, servers)
+            except RuntimeError:
+                pass  # the window was torn down while the scan ran
+
+        threading.Thread(target=run, name="reconnect-rediscovery", daemon=True).start()
+
+    def _on_rediscovery_finished(self, session: ServerSession, servers: list) -> None:
+        session.rediscovering = False
+        if (
+            session not in self._sessions
+            or session.connected
+            or session.denied
+            or not session.auto_reconnect
+            or self._quitting
+        ):
+            return
+        match = self._match_rediscovered(session, servers)
+        if match is None:
+            _log.debug("Re-discovery: %s not found among %d server(s)", session.name, len(servers))
+            return
+        if f"{match.host}:{match.port}" == session.key:
+            return  # still advertised at the failing address; keep direct retries
+        self._migrate_session(session, match)
+
+    def _match_rediscovered(self, session: ServerSession, servers: list) -> ServerInfo | None:
+        """The discovered server that is `session`'s peer, if any.
+
+        The pinned certificate fingerprint is the identity; the display name
+        is the fallback for servers too old to advertise one (soft matching,
+        like the soft cert pin — robust connections over strict identity).
+        """
+        record = self._known_servers.get(session.key)
+        pinned = (record or {}).get("fingerprint") or ""
+        candidates = [s for s in servers if not self._is_own_server(s)]
+        if pinned:
+            for server in candidates:
+                if server.fingerprint == pinned:
+                    return server
+        for server in candidates:
+            if server.name == session.name:
+                return server
+        return None
+
+    def _migrate_session(self, session: ServerSession, server: ServerInfo) -> None:
+        """Move a session (and its stored pairing) to the server's new
+        address, then reconnect immediately."""
+        old_key, new_key = session.key, f"{server.host}:{server.port}"
+        if self._session_for_key(new_key) is not None:
+            return  # the user already opened a session at the new address
+        record = self._known_servers.get(old_key)
+        if record is not None:
+            # Re-key the pairing so the stored token still applies — the
+            # whole point: no fresh approval just because DHCP moved the
+            # server.
+            self._known_servers.remember(
+                new_key, record.get("fingerprint") or "", record["token"]
+            )
+            self._known_servers.forget(old_key)
+        session.key = new_key
+        session.host, session.port = server.host, server.port
+        # The peer's inventory row moves with it; the stale address would
+        # otherwise linger as a permanently-unreachable duplicate.
+        self.client_inventory.remove(old_key)
+        self.client_inventory.record(
+            new_key, "attempt", name=session.name, address=new_key, detail=new_key
+        )
+        self._persist_sessions()
+        message = f"Found {session.name} at new address {new_key} (was {old_key}) — reconnecting"
+        self._set_session_status(session, message)
+        self.log(f"[{session.name}] {message}")
+        # A new address deserves a fresh backoff; the connect failure path
+        # re-arms it (and further re-discovery) if this address fails too.
+        self._cancel_reconnect(session)
+        session.client.connect_to(server.host, server.port)
 
     def _request_server_log(self) -> None:
         session = self._session_for_page(self._tabs.currentWidget())

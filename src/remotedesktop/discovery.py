@@ -28,6 +28,10 @@ class ServerInfo:
     name: str
     host: str
     port: int
+    # The server's TLS certificate fingerprint, when it advertises one —
+    # a stable identity that survives address changes (DHCP gave the server
+    # a new IP after a reboot). Empty from servers too old to send it.
+    fingerprint: str = ""
 
 
 def _parse(data: bytes, expected_type: str) -> dict | None:
@@ -58,10 +62,14 @@ class DiscoveryResponder:
         name: str,
         connect_port: int,
         *,
+        fingerprint: str = "",
         discovery_port: int = DISCOVERY_PORT,
         bind_host: str = "",
     ) -> None:
-        self._reply = _encode("reply", name=name, port=connect_port)
+        # The fingerprint (`fp`) is optional in the reply: clients that
+        # predate it simply ignore the extra field.
+        extra = {"fp": fingerprint} if fingerprint else {}
+        self._reply = _encode("reply", name=name, port=connect_port, **extra)
         self._discovery_port = discovery_port
         self._bind_host = bind_host
         self._socket: socket.socket | None = None
@@ -181,6 +189,12 @@ def discover_servers(
             if not isinstance(name, str) or not isinstance(port, int):
                 _log.debug("Ignoring malformed reply from %s: %r", host, message)
                 continue
-            found.setdefault((host, port), ServerInfo(name=name, host=host, port=port))
+            fingerprint = message.get("fp")
+            if not isinstance(fingerprint, str):
+                fingerprint = ""
+            found.setdefault(
+                (host, port),
+                ServerInfo(name=name, host=host, port=port, fingerprint=fingerprint),
+            )
     _log.debug("Discovery scan finished: %d server(s) found", len(found))
     return list(found.values())

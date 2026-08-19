@@ -233,5 +233,8 @@ class ServerSession:
         self.auto_reconnect = False
         self.reconnect_attempts = 0
         self.reconnect_timer: QTimer | None = None
+        # True while a re-discovery scan for this session runs on a worker
+        # thread (the server may have come back on a different address).
+        self.rediscovering = False
         # What the status bar shows while this session's tab is current.
         self.status_text = ""
