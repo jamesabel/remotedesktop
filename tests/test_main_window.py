@@ -9,7 +9,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QMessageBox
 
 from remotedesktop import client as client_module
-from remotedesktop import db
+from remotedesktop import db, tls
 from remotedesktop.app import MainWindow
 from remotedesktop.autostart import START_OFF, Autostart
 from remotedesktop.client import DiscoveryPanel
@@ -37,7 +37,7 @@ def _clean_test_run_key():
 def make_window(
     tmp_path, credentials=None, *, serving=False, viewer=True, tray_available=False,
     db_name="app.db", discovery_port=None, reconnect_base_seconds=2.0,
-    effects_reducer=None,
+    rediscover=None, effects_reducer=None,
 ):
     """A MainWindow on a temp DB with everything injected.
 
@@ -63,6 +63,9 @@ def make_window(
         connect_port=0,
         tray_available=tray_available,
         reconnect_base_seconds=reconnect_base_seconds,
+        # Auto-reconnect re-discovery must never broadcast on the LAN from a
+        # test: without an injected fake it stays a no-op.
+        rediscover=rediscover if rediscover is not None else (lambda: []),
         effects_reducer=(
             effects_reducer
             if effects_reducer is not None
@@ -955,6 +958,115 @@ def test_auto_reconnect_backs_off_while_server_stays_down(qapp, credentials, tmp
         server.close()
         # Repeated failures keep retrying with doubling delays.
         pump(qapp, lambda: session.reconnect_attempts >= 3, timeout=15.0)
+        assert not session.connected
+    finally:
+        window.close()
+        server.close()
+
+
+def test_auto_reconnect_follows_server_to_new_address(qapp, credentials, tmp_path):
+    """The server comes back on a different port (the moved-DHCP-address
+    stand-in): re-discovery matches it by certificate fingerprint and the
+    session migrates — stored token included, so no re-approval prompt."""
+    server = make_share_server(credentials, tmp_path)
+    discovered: list[ServerInfo] = []
+    window = make_window(
+        tmp_path, reconnect_base_seconds=0.05, rediscover=lambda: list(discovered)
+    )
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        old_key = session.key
+        server.close()
+        pump(qapp, lambda: not session.connected)  # the drop must land first
+
+        # Any approval request would be denied: the migrated token must make
+        # the reconnect promptless.
+        replacement = ShareServer(
+            approve_client=lambda *_: False,
+            credentials=credentials,
+            paired=PairedClients(db.connect(tmp_path / "server.db")),
+        )
+        assert replacement.listen(0)
+        try:
+            # The name deliberately differs: the fingerprint is the identity.
+            discovered.append(
+                ServerInfo(
+                    name="not-the-display-name",
+                    host="127.0.0.1",
+                    port=replacement.port,
+                    fingerprint=tls.certificate_fingerprint(credentials[0]),
+                )
+            )
+            pump(qapp, lambda: session.connected, timeout=15.0)
+            new_key = f"127.0.0.1:{replacement.port}"
+            assert session.key == new_key
+            assert (session.host, session.port) == ("127.0.0.1", replacement.port)
+            # The pairing moved with the session: token at the new key only.
+            record = window._known_servers.get(new_key)
+            assert record is not None and record["token"]
+            assert window._known_servers.get(old_key) is None
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_rediscovery_falls_back_to_the_name_for_old_servers(qapp, credentials, tmp_path):
+    # A server too old to advertise a fingerprint is matched by its display
+    # name (which a connected session tracks from the welcome message — the
+    # server's reported hostname).
+    server = make_share_server(credentials, tmp_path)
+    discovered: list[ServerInfo] = []
+    window = make_window(
+        tmp_path, reconnect_base_seconds=0.05, rediscover=lambda: list(discovered)
+    )
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        assert session.name == socket.gethostname()  # renamed by the welcome
+        server.close()
+        pump(qapp, lambda: not session.connected)  # the drop must land first
+
+        replacement = ShareServer(
+            approve_client=lambda *_: False,
+            credentials=credentials,
+            paired=PairedClients(db.connect(tmp_path / "server.db")),
+        )
+        assert replacement.listen(0)
+        try:
+            discovered.append(
+                ServerInfo(name=session.name, host="127.0.0.1", port=replacement.port)
+            )
+            pump(qapp, lambda: session.connected, timeout=15.0)
+            assert session.key == f"127.0.0.1:{replacement.port}"
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_rediscovery_ignores_unrelated_servers(qapp, credentials, tmp_path):
+    server = make_share_server(credentials, tmp_path)
+    discovered = [
+        ServerInfo(name="someone-else", host="127.0.0.1", port=59999, fingerprint="ff" * 32)
+    ]
+    window = make_window(
+        tmp_path, reconnect_base_seconds=0.05, rediscover=lambda: list(discovered)
+    )
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        old_key = session.key
+        server.close()
+        # Enough failures for several re-discovery scans to have run.
+        pump(qapp, lambda: session.reconnect_attempts >= 4, timeout=15.0)
+        assert session.key == old_key
         assert not session.connected
     finally:
         window.close()

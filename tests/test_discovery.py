@@ -120,6 +120,48 @@ def test_replies_with_malformed_fields_are_ignored() -> None:
     assert servers == [ServerInfo(name="ok", host=LOOPBACK, port=9)]
 
 
+def test_reply_carries_the_advertised_fingerprint() -> None:
+    port = free_udp_port()
+    fingerprint = "ab" * 32
+    responder = DiscoveryResponder(
+        "fpbox", 2345, fingerprint=fingerprint, discovery_port=port, bind_host=LOOPBACK
+    )
+    responder.start()
+    try:
+        servers = discover_servers(
+            timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
+        )
+    finally:
+        responder.stop()
+    assert servers == [
+        ServerInfo(name="fpbox", host=LOOPBACK, port=2345, fingerprint=fingerprint)
+    ]
+
+
+def test_reply_with_malformed_fingerprint_still_counts() -> None:
+    # A junk `fp` blanks the fingerprint but never costs the discovery —
+    # matching just falls back to the name.
+    port = free_udp_port()
+
+    def fake_server(sock: socket.socket) -> None:
+        _probe, sender = sock.recvfrom(4096)
+        reply = {
+            "magic": "remotedesktop", "version": 1, "type": "reply",
+            "name": "ok", "port": 9, "fp": 12345,
+        }
+        sock.sendto(json.dumps(reply).encode(), sender)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind((LOOPBACK, port))
+        thread = threading.Thread(target=fake_server, args=(sock,), daemon=True)
+        thread.start()
+        servers = discover_servers(
+            timeout=1.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
+        )
+        thread.join()
+    assert servers == [ServerInfo(name="ok", host=LOOPBACK, port=9, fingerprint="")]
+
+
 def test_probe_send_failure_is_tolerated() -> None:
     servers = discover_servers(
         timeout=0.1,

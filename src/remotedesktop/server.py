@@ -295,8 +295,14 @@ class SharingTab(QWidget):
         self._listening = server.listen(self._connect_port)
         self._discoverable = False
         if self._listening:
+            # Advertising the cert fingerprint lets clients recognize this
+            # server by identity when its IP changes (auto-reconnect
+            # re-discovery), not just by address.
             responder = DiscoveryResponder(
-                self._name, server.port, discovery_port=self._discovery_port
+                self._name,
+                server.port,
+                fingerprint=tls.certificate_fingerprint(self._credentials[0]),
+                discovery_port=self._discovery_port,
             )
             try:
                 responder.start()
