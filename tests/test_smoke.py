@@ -1,4 +1,5 @@
 import socket
+import threading
 
 import remotedesktop
 from remotedesktop.client import DiscoveryPanel
@@ -35,9 +36,24 @@ def test_sharing_window_is_discoverable(qapp, credentials, tmp_path) -> None:
     port = free_udp_port()
     window = make_window(tmp_path, credentials, serving=True, discovery_port=port)
     try:
-        servers = discover_servers(
-            timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
+        # Scan on a worker thread, as the app does: blocking the GUI thread in
+        # recvfrom for seconds while a live window (sockets, timers) exists
+        # leaves Qt unable to deliver its events.
+        results: list = []
+        scan = threading.Thread(
+            target=lambda: results.append(
+                discover_servers(
+                    timeout=2.0, discovery_port=port, broadcast_hosts=(LOOPBACK,)
+                )
+            ),
+            name="discovery-scan",
+            daemon=True,
         )
+        scan.start()
+        while scan.is_alive():
+            qapp.processEvents()
+            scan.join(timeout=0.02)
+        servers = results[0]
         assert [s.name for s in servers] == [socket.gethostname()]
         assert servers[0].port == window.sharing_tab.share_server.port
     finally:
