@@ -29,3 +29,6 @@ badges/
 # IDE
 .idea/
 .vscode/
+
+# Local environment / secrets
+.env
