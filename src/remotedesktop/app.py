@@ -993,7 +993,10 @@ class MainWindow(QMainWindow):
         self.log("Restarting: freeing ports and launching a new process")
         _log.info("Restart requested — relaunching %s %s", program, " ".join(args))
         self.sharing_tab.shutdown()
-        if not QProcess.startDetached(program, args):
+        # PySide6's static startDetached returns (started, pid) — the tuple is
+        # always truthy, so it must be unpacked to detect a failed launch.
+        started, _unused_pid = QProcess.startDetached(program, args)
+        if not started:
             # Extremely unlikely (the program path exists); the app stays open —
             # sharing is stopped, but the machine isn't left with nothing.
             self.log("Restart failed: could not launch a new process — restart manually")

@@ -583,7 +583,9 @@ def test_restart_declined_keeps_serving(qapp, credentials, tmp_path, monkeypatch
         QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
     )
     launches = []
-    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: launches.append(a)))
+    monkeypatch.setattr(
+        QProcess, "startDetached", staticmethod(lambda *a: (launches.append(a), 1) and (True, 1))
+    )
     window = make_window(tmp_path, credentials, serving=True)
     try:
         window._restart_app()
@@ -599,8 +601,9 @@ def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeyp
         QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
     )
     launches, quits = [], []
+    # The real static startDetached returns (started, pid).
     monkeypatch.setattr(
-        QProcess, "startDetached", staticmethod(lambda *a: launches.append(a) or True)
+        QProcess, "startDetached", staticmethod(lambda *a: (launches.append(a), 1) and (True, 1))
     )
     monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
     window = make_window(tmp_path, credentials, serving=True)
@@ -610,6 +613,24 @@ def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeyp
     assert window.sharing_tab.responder is None
     assert launches == [(sys.executable, ["-m", "remotedesktop"])]
     assert quits == [True]
+
+
+def test_restart_stays_open_when_the_relaunch_fails(qapp, credentials, tmp_path, monkeypatch):
+    """startDetached's failure is the (False, -1) tuple — always truthy, so a
+    bare truthiness check never noticed it and quit into nothing."""
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    quits = []
+    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: (False, -1)))
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        window._restart_app()
+        assert quits == []
+        assert "Restart failed" in window.connection_log.toPlainText()
+    finally:
+        window.close()
 
 
 def test_viewing_and_sharing_between_two_windows_loopback(qapp, credentials, tmp_path, monkeypatch):
