@@ -1,0 +1,22 @@
+# Keeps the pinned toolchain current. ruff and ty (pre-1.0, frequent
+# releases that add rules) are locked in uv.lock so CI never floats to a
+# new version by accident; these weekly PRs are the deliberate upgrade
+# path, and CI validates each one before it can merge.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # One PR for the whole toolchain rather than one per package.
+      dev-tools:
+        dependency-type: "development"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
