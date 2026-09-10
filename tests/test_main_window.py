@@ -583,7 +583,9 @@ def test_restart_declined_keeps_serving(qapp, credentials, tmp_path, monkeypatch
         QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
     )
     launches = []
-    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: launches.append(a)))
+    monkeypatch.setattr(
+        QProcess, "startDetached", staticmethod(lambda *a: (launches.append(a), 1) and (True, 1))
+    )
     window = make_window(tmp_path, credentials, serving=True)
     try:
         window._restart_app()
@@ -599,8 +601,9 @@ def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeyp
         QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
     )
     launches, quits = [], []
+    # The real static startDetached returns (started, pid).
     monkeypatch.setattr(
-        QProcess, "startDetached", staticmethod(lambda *a: launches.append(a) or True)
+        QProcess, "startDetached", staticmethod(lambda *a: (launches.append(a), 1) and (True, 1))
     )
     monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
     window = make_window(tmp_path, credentials, serving=True)
@@ -610,6 +613,24 @@ def test_restart_frees_ports_and_relaunches(qapp, credentials, tmp_path, monkeyp
     assert window.sharing_tab.responder is None
     assert launches == [(sys.executable, ["-m", "remotedesktop"])]
     assert quits == [True]
+
+
+def test_restart_stays_open_when_the_relaunch_fails(qapp, credentials, tmp_path, monkeypatch):
+    """startDetached's failure is the (False, -1) tuple — always truthy, so a
+    bare truthiness check never noticed it and quit into nothing."""
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+    )
+    quits = []
+    monkeypatch.setattr(QProcess, "startDetached", staticmethod(lambda *a: (False, -1)))
+    monkeypatch.setattr(QApplication, "quit", staticmethod(lambda: quits.append(True)))
+    window = make_window(tmp_path, credentials, serving=True)
+    try:
+        window._restart_app()
+        assert quits == []
+        assert "Restart failed" in window.connection_log.toPlainText()
+    finally:
+        window.close()
 
 
 def test_viewing_and_sharing_between_two_windows_loopback(qapp, credentials, tmp_path, monkeypatch):
@@ -1007,6 +1028,89 @@ def test_auto_reconnect_follows_server_to_new_address(qapp, credentials, tmp_pat
             record = window._known_servers.get(new_key)
             assert record is not None and record["token"]
             assert window._known_servers.get(old_key) is None
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def _moved_replacement(credentials, tmp_path):
+    """The same server (same certificate) listening at a new address, with
+    approval denied: only the carried-over token can get a viewer in."""
+    replacement = ShareServer(
+        approve_client=lambda *_: False,
+        credentials=credentials,
+        paired=PairedClients(db.connect(tmp_path / "server.db")),
+    )
+    assert replacement.listen(0)
+    return replacement, ServerInfo(
+        name="box",
+        host="127.0.0.1",
+        port=replacement.port,
+        fingerprint=tls.certificate_fingerprint(credentials[0]),
+    )
+
+
+def test_activating_a_moved_server_reuses_its_pairing(qapp, credentials, tmp_path):
+    """The scenario behind a needless re-approval: the server rebooted onto a
+    new DHCP address, the user picks it from the discovery list, and no
+    session exists for either address. The discovered fingerprint matches the
+    stored pairing, which moves to the new address — no prompt."""
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        old_key = session.key
+        token = window._known_servers.get(old_key)["token"]
+        window._on_tab_close_requested(0)  # deliberately closed: not restored
+        assert window._sessions == []
+        server.close()
+
+        replacement, moved = _moved_replacement(credentials, tmp_path)
+        try:
+            window._on_server_activated(moved)
+            session = window._sessions[0]
+            pump(qapp, lambda: session.connected)
+            new_key = f"127.0.0.1:{replacement.port}"
+            assert session.key == new_key
+            assert window._known_servers.get(new_key)["token"] == token
+            assert window._known_servers.get(old_key) is None
+            assert old_key not in window.client_inventory._peers
+            assert "reusing that pairing" in window.connection_log.toPlainText()
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_activating_a_moved_server_migrates_its_retrying_session(qapp, credentials, tmp_path):
+    """A session still auto-reconnecting to the old address migrates into the
+    activation instead of a second tab appearing for the same server."""
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        old_key = session.key
+        server.close()
+        pump(qapp, lambda: not session.connected)
+        assert session.auto_reconnect
+
+        replacement, moved = _moved_replacement(credentials, tmp_path)
+        try:
+            window._on_server_activated(moved)
+            assert window._sessions == [session]
+            new_key = f"127.0.0.1:{replacement.port}"
+            assert session.key == new_key
+            pump(qapp, lambda: session.connected)
+            assert window._known_servers.get(new_key)["token"]
+            assert window._known_servers.get(old_key) is None
+            assert old_key not in window.client_inventory._peers
         finally:
             replacement.close()
     finally:

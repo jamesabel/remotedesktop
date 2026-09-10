@@ -1,6 +1,8 @@
 import socket
 import threading
 
+import semver
+
 import remotedesktop
 from remotedesktop.client import DiscoveryPanel
 from remotedesktop.discovery import ServerInfo, discover_servers
@@ -11,7 +13,9 @@ from test_main_window import make_window
 
 
 def test_version() -> None:
-    assert remotedesktop.__version__
+    # Versioning is strict semver (compat.py compares majors on every
+    # connection), so the version string must parse as one.
+    assert semver.Version.parse(remotedesktop.__version__).major >= 1
 
 
 def test_main_window_hosts_discovery_panel(qapp, tmp_path) -> None:
