@@ -132,6 +132,20 @@ class KnownServers:
         )
         self._db.commit()
 
+    def key_for_fingerprint(self, fingerprint: str) -> str | None:
+        """The "host:port" a server with this certificate was paired at, if any.
+
+        The certificate is the server's stable identity across an address
+        change; records without a pin never match.
+        """
+        if not fingerprint:
+            return None
+        row = self._db.execute(
+            "SELECT key FROM known_servers WHERE fingerprint = ? ORDER BY key LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
+        return row[0] if row is not None else None
+
     def forget(self, key: str) -> None:
         """Drop a server's stored token and pin, so the next connection re-pairs."""
         self._db.execute("DELETE FROM known_servers WHERE key = ?", (key,))

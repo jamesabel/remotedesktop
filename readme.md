@@ -59,7 +59,7 @@ one-click *Forget* / *Revoke*, and the live connection log.
 - 🔒 **TLS + approve-once pairing** — every connection is encrypted; the server user approves a new client once, after which it reconnects with a stored token and no prompt.
 - 🔐 **Honest lock-screen behavior** — a locked server tells viewers so with a clear on-screen notice instead of a frozen frame, and streaming resumes by itself once someone signs in at the machine (see [The Windows lock screen](#the-windows-lock-screen)).
 - 📊 **Built-in performance monitoring** — live bandwidth and round-trip-time graphs with window statistics (mean/min/max/p99/jitter), plus a per-viewer table on the server.
-- 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Even a server that comes back on a **different IP address** (a new DHCP lease after a reboot) is found again: reconnection re-scans the LAN, recognizes the server by its certificate identity, and follows it to the new address — pairing intact, so still no prompt. Connections that were open when the app closed are restored on the next start.
+- 🔁 **Robust connections** — dead connections are detected within seconds, and dropped sessions reconnect automatically with backoff; a server restart heals by itself, no clicks needed. Even a server that comes back on a **different IP address** (a new DHCP lease after a reboot) is found again: reconnection re-scans the LAN, recognizes the server by its certificate identity, and follows it to the new address — pairing intact, so still no prompt (and choosing the moved server from the discovery list by hand reuses that pairing too). Connections that were open when the app closed are restored on the next start.
 - 🚀 **Hands-off operation** — start-at-login (per-user, no admin rights) with a choice of minimized (the default and recommended — sharing resumes after a reboot with no clicks), normal, maximized, or not starting at all; close-to-tray while sharing (the screen stays available with the window closed); and a *Restart app* button usable from the remote session itself, so you can update the software without visiting the machine.
 - 🗃️ **Persistent peer inventory** — a SQLite-backed history of every peer seen on the LAN, with one-click *Revoke* / *Forget*.
 - 🧭 **Desktop-app niceties** — a real menu bar with standard shortcuts (Preferences on *File ▸ Preferences*, Ctrl+,; About on the Help menu), a status-bar sharing indicator, a confirmation before quitting with viewers connected, and window/panel layout that persists across restarts.
@@ -229,7 +229,10 @@ fingerprint. The fingerprint is the server's stable identity: when a
 reconnecting client can no longer reach a server at its last known address
 (typically a new DHCP lease after a reboot), it re-scans and matches the
 fingerprint to follow the server to its new address, keeping the stored
-pairing token so no fresh approval is needed. Windows Firewall
+pairing token so no fresh approval is needed. The same applies when you
+pick a server from the discovery list by hand: if its fingerprint matches
+a pairing stored under an old address, that pairing moves to the new
+address and the connection is admitted without a prompt. Windows Firewall
 must allow Python to receive inbound UDP on that port for a server to be
 discoverable from other machines.
 

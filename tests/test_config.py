@@ -71,6 +71,16 @@ def test_known_servers_round_trip(tmp_path) -> None:
     assert record == {"fingerprint": "fingerprint-abc", "token": "token-xyz"}
 
 
+def test_known_server_is_found_by_certificate_fingerprint(tmp_path) -> None:
+    known = KnownServers(db.connect(tmp_path / "app.db"))
+    known.remember("host:1", "fp-a", "tok-a")
+    known.remember("host:2", "", "tok-unpinned")
+    assert known.key_for_fingerprint("fp-a") == "host:1"
+    assert known.key_for_fingerprint("fp-unknown") is None
+    # An empty fingerprint is "no pin", never a wildcard.
+    assert known.key_for_fingerprint("") is None
+
+
 def test_known_server_can_be_forgotten(tmp_path) -> None:
     path = tmp_path / "app.db"
     known = KnownServers(db.connect(path))

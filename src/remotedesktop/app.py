@@ -1166,11 +1166,49 @@ class MainWindow(QMainWindow):
             self.log(f"Already connected to {session.name} ({key})")
             return
         if session is None:
+            session = self._adopt_moved_pairing(server)
+        if session is None:
             session = self._create_session(key, server.name)
         else:
             session.name = server.name
             self._tabs.setTabText(self._sessions.index(session), session.name)
         self._connect_session(session, server.host, server.port)
+
+    def _adopt_moved_pairing(self, server: ServerInfo) -> ServerSession | None:
+        """A discovered server whose certificate is already paired, but at
+        another address (DHCP moved it since the last visit): carry the
+        stored token over so this connection needs no fresh approval.
+
+        A session still retrying the old address migrates whole (returned,
+        for the caller to connect); otherwise only the pairing moves. A
+        session *connected* at the old address means the server is reachable
+        at both, so the pairing is copied and nothing is torn down.
+        """
+        new_key = f"{server.host}:{server.port}"
+        if not server.fingerprint or self._known_servers.get(new_key) is not None:
+            return None
+        old_key = self._known_servers.key_for_fingerprint(server.fingerprint)
+        if old_key is None:
+            return None
+        old_session = self._session_for_key(old_key)
+        if old_session is not None and not old_session.connected:
+            self._move_session(old_session, server)
+            self.log(
+                f"[{old_session.name}] Found at new address {new_key} (was {old_key}) "
+                "— reusing its pairing"
+            )
+            return old_session
+        record = self._known_servers.get(old_key)
+        if record is None:
+            return None
+        self._known_servers.remember(new_key, server.fingerprint, record["token"])
+        if old_session is None:
+            # The old address is stale: drop its pairing and history row so
+            # they don't linger as a permanently-unreachable duplicate.
+            self._known_servers.forget(old_key)
+            self.client_inventory.remove(old_key)
+        self.log(f"{server.name} at {new_key} was paired at {old_key} — reusing that pairing")
+        return None
 
     def _create_session(self, key: str, name: str) -> ServerSession:
         viewer = ViewerWidget()
@@ -1492,9 +1530,23 @@ class MainWindow(QMainWindow):
     def _migrate_session(self, session: ServerSession, server: ServerInfo) -> None:
         """Move a session (and its stored pairing) to the server's new
         address, then reconnect immediately."""
-        old_key, new_key = session.key, f"{server.host}:{server.port}"
-        if self._session_for_key(new_key) is not None:
+        if self._session_for_key(f"{server.host}:{server.port}") is not None:
             return  # the user already opened a session at the new address
+        old_key = session.key
+        self._move_session(session, server)
+        new_key = session.key
+        message = f"Found {session.name} at new address {new_key} (was {old_key}) — reconnecting"
+        self._set_session_status(session, message)
+        self.log(f"[{session.name}] {message}")
+        # A new address deserves a fresh backoff; the connect failure path
+        # re-arms it (and further re-discovery) if this address fails too.
+        self._cancel_reconnect(session)
+        session.client.connect_to(server.host, server.port)
+
+    def _move_session(self, session: ServerSession, server: ServerInfo) -> None:
+        """Re-key a session, its stored pairing, and its history row to the
+        server's new address (no connection attempt)."""
+        old_key, new_key = session.key, f"{server.host}:{server.port}"
         record = self._known_servers.get(old_key)
         if record is not None:
             # Re-key the pairing so the stored token still applies — the
@@ -1513,13 +1565,6 @@ class MainWindow(QMainWindow):
             new_key, "attempt", name=session.name, address=new_key, detail=new_key
         )
         self._persist_sessions()
-        message = f"Found {session.name} at new address {new_key} (was {old_key}) — reconnecting"
-        self._set_session_status(session, message)
-        self.log(f"[{session.name}] {message}")
-        # A new address deserves a fresh backoff; the connect failure path
-        # re-arms it (and further re-discovery) if this address fails too.
-        self._cancel_reconnect(session)
-        session.client.connect_to(server.host, server.port)
 
     def _request_server_log(self) -> None:
         session = self._session_for_page(self._tabs.currentWidget())
