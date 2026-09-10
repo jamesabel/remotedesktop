@@ -22,7 +22,13 @@ change goes through a pull request: branch → push → PR → CI green → merg
 The ruleset also **requires the `ruff`, `ty`, and `test` checks to pass**
 (GitHub Actions, non-strict), so a merge with a red or missing check is
 rejected by GitHub; if a CI job is added or renamed, update the ruleset's
-required checks to match. CI publishes the coverage badge to the
+required checks to match. **ruff and ty are pinned dev dependencies**
+(`uv.lock`, run as `uv run ruff check .` / `uv run ty check .`) — never
+`uvx <tool>` unpinned in CI, because ty is pre-1.0 and a release adding a
+rule turned master red with no code change (2026-09-10). Dependabot
+(`.github/dependabot.yml`, weekly, `uv` + `github-actions` ecosystems)
+opens the upgrade PRs; fix any new findings in that PR. ty's default exit
+code is nonzero on *warnings*, deliberately kept so they never accumulate. CI publishes the coverage badge to the
 unprotected `badges` branch (readme references it by raw URL), so no
 workflow ever needs to write to `master`.
 

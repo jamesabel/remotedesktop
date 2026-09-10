@@ -6,12 +6,18 @@ on:
   pull_request:
 
 jobs:
+  # ruff and ty are dev dependencies pinned by uv.lock (not floating `uvx`
+  # installs): a new ty release adding rules must not turn master red on
+  # its own. Dependabot (.github/dependabot.yml) opens the upgrade PRs, so
+  # any new findings get fixed in the PR that brings the new version.
   ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uvx ruff check .
+      # Only the dev group: linting doesn't need PySide6 & co. installed.
+      - run: uv sync --only-group dev
+      - run: uv run --no-sync ruff check .
 
   ty:
     runs-on: ubuntu-latest
@@ -21,7 +27,7 @@ jobs:
       # ty resolves imports from the project venv; pyproject pins the
       # type-checking platform to win32 (the app's target).
       - run: uv sync
-      - run: uvx ty check .
+      - run: uv run ty check .
 
   test:
     # The app targets Windows: input injection, schannel TLS, and the GUI
