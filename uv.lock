@@ -863,10 +863,10 @@ wheels = [
 
 [[package]]
 name = "tobool"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/f1/93f13ab26ebf609d980aeb8285f1d78c8f1f87727139e2d9a0181b01571a/tobool-0.4.0-py3-none-any.whl", hash = "sha256:1b31c9ece9bad47e8a53e17bf0f38335570cb1d9576b2dc0d3df61bab4f1cb47", size = 4328, upload-time = "2023-12-27T09:20:32.402Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/96/336aac52a0da327d74205246e57f47c65753f02d13bebddb88ef7bb15d35/tobool-0.5.0-py3-none-any.whl", hash = "sha256:5ac828985443c69f4bd0ea246c384def614c1e5228563887c27c56b9ca884e29", size = 5076, upload-time = "2026-08-13T02:24:58.301Z" },
 ]
 
 [[package]]
