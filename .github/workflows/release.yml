@@ -23,7 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - name: Read version
         id: version
@@ -58,7 +58,7 @@ jobs:
     permissions:
       contents: write # upload the installer to the release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - name: Install NSIS
         # Not preinstalled on windows-latest; choco puts makensis.exe at
