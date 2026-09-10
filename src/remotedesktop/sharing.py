@@ -44,9 +44,9 @@ from remotedesktop.config import (
 )
 from remotedesktop.clipboard import describe_payload
 from remotedesktop.discovery import DEFAULT_CONNECT_PORT
-from remotedesktop import dxgi, frames
+from remotedesktop import backlog, dxgi, frames
 from remotedesktop.input_injection import InputInjector
-from remotedesktop.performance import PerformanceMonitor
+from remotedesktop.performance import PerformanceMonitor, format_rate
 from remotedesktop.protocol import MAX_PAYLOAD, PROTOCOL_VERSION, MessageStream
 from remotedesktop import db, tls
 
@@ -56,12 +56,14 @@ _log = logging.getLogger("remotedesktop.sharing")
 # Affordable since inter-frame compression: an unchanged screen costs only
 # a capture and a memory compare per tick — nothing is encoded or sent.
 DEFAULT_FPS = 30
-# Skip sending to a client whose socket buffer is this far behind. Unsent
-# bytes are queued latency (the client renders them all before showing
-# anything current), so the cap is kept tight: ~160 ms of queue on 100 Mbit
-# WiFi, with headroom above one 4K keyframe (~1 MB) so a fresh keyframe
-# never trips it by itself.
-_MAX_SEND_BACKLOG = 2 * 1024 * 1024
+# A viewer whose socket holds more unsent bytes than its BacklogGovernor's
+# cap (backlog.py — sized from the link's measured throughput and latency)
+# is skipped for the tick; the bands it missed accumulate and ship as one
+# merged delta once it drains. Brief withholding is normal flow control, so
+# only a viewer that stays behind this long is reported in the status log.
+_BACKLOG_REPORT_SECONDS = 1.0
+# Cadence of the debug-log summary of encode timings and flow control.
+_STATS_INTERVAL_SECONDS = 10.0
 # Until a client passes the approval handshake it may only send small
 # messages (a hello is well under 1 KB); the cap is lifted on admission.
 _PREAUTH_MAX_PAYLOAD = 64 * 1024
@@ -156,13 +158,33 @@ class ShareServer(QObject):
         self._final: set[MessageStream] = set()
         # What each controlling stream currently holds down: (buttons, vks).
         self._pressed: dict[MessageStream, tuple[set[str], set[int]]] = {}
-        # Streams currently too far behind to receive frames (see
-        # _broadcast_frame); entering/leaving this set emits a status message.
+        # Flow control per admitted stream (see _ready_streams): its backlog
+        # governor, when it first fell behind in the current episode, the
+        # last RTT sample fed to the governor, and the streams whose "not
+        # keeping up" status line is currently outstanding.
+        self._governors: dict[MessageStream, backlog.BacklogGovernor] = {}
+        self._backlog_since: dict[MessageStream, float] = {}
+        self._last_rtt_fed: dict[MessageStream, float] = {}
         self._backlogged: set[MessageStream] = set()
         # Inter-frame compression state: which streams need a full keyframe
-        # next broadcast (just admitted, just caught up after a backlog, or
-        # asked for one), and the previous capture to diff.
+        # next broadcast (just admitted, or asked for one), the bands each
+        # stream is still owed (accumulated while it was behind), and the
+        # previous capture to diff against.
         self._needs_keyframe: set[MessageStream] = set()
+        self._dirty: dict[MessageStream, list[tuple[int, int]]] = {}
+        # Encoding runs off the GUI thread; at most one job is in flight and
+        # _takers records who gets its output (keyframe takers, delta takers
+        # by band tuple). Ticks that land while it runs skip the capture.
+        self._encoder = frames.FrameEncoder(self)
+        self._encoder.encoded.connect(self._on_encoded)
+        self._takers: tuple[list[MessageStream], dict[tuple, list[MessageStream]]] | None = None
+        # Debug-log summary counters (see _log_stats).
+        self._stats_since: float | None = None
+        self._encodes = 0
+        self._encode_seconds = 0.0
+        self._encode_max = 0.0
+        self._ticks_skipped = 0
+        self._frames_withheld = 0
         # What each stream's hello said about the machine behind it
         # (name/user/host/os), for the server UI's viewers table.
         self._viewer_info: dict[MessageStream, dict] = {}
@@ -243,7 +265,17 @@ class ShareServer(QObject):
         self._final.clear()
         self._pressed.clear()
         self._backlogged.clear()
+        self._backlog_since.clear()
+        self._last_rtt_fed.clear()
+        self._governors.clear()
         self._needs_keyframe.clear()
+        self._dirty.clear()
+        self._takers = None
+        # Waits for an in-flight encode so nothing lands after teardown; a
+        # fresh encoder keeps a re-listen (tests) working.
+        self._encoder.close()
+        self._encoder = frames.FrameEncoder(self)
+        self._encoder.encoded.connect(self._on_encoded)
         self._viewer_info.clear()
         self._previous_frame = None
         self._cursor_shape = None
@@ -480,6 +512,8 @@ class ShareServer(QObject):
         stream.max_payload = MAX_PAYLOAD  # pre-auth cap lifted once approved
         stream.send_json(welcome)
         self._needs_keyframe.add(stream)  # its first frame must be a full one
+        self._dirty[stream] = []
+        self._governors[stream] = backlog.BacklogGovernor()
         self._streams.append(stream)
         self._broadcast_cursor(new_stream=stream)  # start with the right cursor
         self._broadcast_lock(new_stream=stream)  # tell it if the session is locked
@@ -597,6 +631,10 @@ class ShareServer(QObject):
         self._all_streams.discard(stream)
         self._prompting.discard(stream)
         self._backlogged.discard(stream)
+        self._backlog_since.pop(stream, None)
+        self._last_rtt_fed.pop(stream, None)
+        self._governors.pop(stream, None)
+        self._dirty.pop(stream, None)
         self._needs_keyframe.discard(stream)
         self._viewer_info.pop(stream, None)
         self._release_input(stream)
@@ -711,67 +749,165 @@ class ShareServer(QObject):
         elif new_stream is not None and locked:
             new_stream.send_json({"type": "session_lock", "locked": True})
 
+    def _send_cap(self, stream: MessageStream) -> int:
+        """Unsent bytes `stream` may have queued before frames are withheld
+        from it (its governor's cap; a seam for tests)."""
+        governor = self._governors.get(stream)
+        return governor.cap if governor is not None else backlog.CAP_MIN
+
+    def _ready_streams(self, now: float) -> list[MessageStream]:
+        """The admitted streams that can take a frame this tick.
+
+        Feeds every stream's backlog governor (unsent bytes, bytes handed to
+        the socket, and the latest in-band RTT when a monitor is attached)
+        and withholds frames from streams over their cap. A stream that
+        stays behind for _BACKLOG_REPORT_SECONDS gets one status line, and
+        one more when it catches up.
+        """
+        ready: list[MessageStream] = []
+        for stream in self._streams:
+            pending = stream.socket.bytesToWrite()
+            governor = self._governors[stream]
+            governor.observe(pending, stream.bytes_sent)
+            if self._performance is not None:
+                rtt = self._performance.metrics_for(stream).get("rtt_ms")
+                if rtt is not None and rtt != self._last_rtt_fed.get(stream):
+                    self._last_rtt_fed[stream] = rtt
+                    governor.observe_rtt(rtt)
+            cap = self._send_cap(stream)
+            if pending > cap:
+                self._frames_withheld += 1
+                since = self._backlog_since.setdefault(stream, now)
+                if stream not in self._backlogged and now - since >= _BACKLOG_REPORT_SECONDS:
+                    self._backlogged.add(stream)
+                    self.status.emit(
+                        f"Viewer at {_peer(stream.socket)} is not keeping up "
+                        f"({humanize.naturalsize(pending, binary=True)} unsent, cap "
+                        f"{humanize.naturalsize(cap, binary=True)}) — withholding frames "
+                        "until it drains"
+                    )
+                continue
+            self._backlog_since.pop(stream, None)
+            if stream in self._backlogged:
+                self._backlogged.discard(stream)
+                self.status.emit(f"Viewer at {_peer(stream.socket)} caught up — resuming frames")
+            ready.append(stream)
+        return ready
+
     def _broadcast_frame(self) -> None:
         if not self._streams:
             return
         self._broadcast_cursor()  # polled at the frame rate, sent on change
         self._broadcast_lock()  # likewise
+        now = time.monotonic()
+        self._log_stats(now)
+        if self._encoder.busy:
+            # Last tick's encode is still running: skip the capture (DXGI
+            # keeps accumulating changes) so the next tick diffs everything
+            # that changed since the frame being encoded.
+            self._ticks_skipped += 1
+            return
         image = self._capture()
         if image is None:
             self.status.emit("Screen capture failed (null image)")
             return
         if image is self._previous_frame:
-            # DXGI reported no change since the last tick: skip the diff.
-            bands: list[tuple[int, int]] | None = []
+            bands: list[tuple[int, int]] = []  # DXGI: unchanged since the last tick
         else:
-            # bands is None when there is no comparable previous capture
-            # (first frame, or the resolution changed): everyone gets a
-            # full frame.
-            bands = (
+            changed = (
                 frames.changed_bands(self._previous_frame, image)
                 if self._previous_frame is not None
                 else None
             )
+            if changed is None:
+                # No comparable previous capture (first frame, or the
+                # resolution changed): everyone starts over from a keyframe.
+                self._needs_keyframe.update(self._streams)
+                bands = []
+            else:
+                bands = changed
         self._previous_frame = image
-        # Encode each variant at most once per tick, shared by all takers.
-        keyframe_png: bytes | None = None
-        delta_payload: bytes | None = None
-        for stream in self._streams:
-            if stream.socket.bytesToWrite() > _MAX_SEND_BACKLOG:
-                # Client is not keeping up; drop frames for it (and say so —
-                # to the viewer this looks like a frozen or flaky connection).
-                # Its canvas will be stale once it catches up, so it must
-                # restart from a keyframe.
-                self._needs_keyframe.add(stream)
-                if stream not in self._backlogged:
-                    self._backlogged.add(stream)
-                    unsent = humanize.naturalsize(
-                        stream.socket.bytesToWrite(), binary=True
-                    )
-                    self.status.emit(
-                        f"Viewer at {_peer(stream.socket)} is not keeping up "
-                        f"({unsent} unsent) — dropping frames for it"
-                    )
+        if bands:
+            height = image.height()
+            for stream in self._streams:
+                if stream not in self._needs_keyframe:
+                    self._dirty[stream] = frames.merge_bands(self._dirty[stream], bands, height)
+        keyframe_takers: list[MessageStream] = []
+        delta_takers: dict[tuple, list[MessageStream]] = {}
+        for stream in self._ready_streams(now):
+            if stream in self._needs_keyframe:
+                keyframe_takers.append(stream)
+                self._dirty[stream] = []  # a keyframe supersedes anything owed
+            elif self._dirty[stream]:
+                owed = tuple(self._dirty[stream])
+                self._dirty[stream] = []
+                delta_takers.setdefault(owed, []).append(stream)
+        if not keyframe_takers and not delta_takers:
+            return  # nothing changed for anyone who could take it
+        self._takers = (keyframe_takers, delta_takers)
+        self._encoder.submit(image, keyframe=bool(keyframe_takers), deltas=delta_takers)
+
+    def _on_encoded(self, result: frames.EncodeResult) -> None:
+        takers, self._takers = self._takers, None
+        if result.failed or takers is None:
+            # Nothing reached the viewers; forget the baseline so the next
+            # tick starts everyone over from a keyframe.
+            self._previous_frame = None
+            return
+        keyframe_takers, delta_takers = takers
+        self._encodes += 1
+        self._encode_seconds += result.seconds
+        self._encode_max = max(self._encode_max, result.seconds)
+        if result.keyframe is not None:
+            _log.debug(
+                "Keyframe: %s PNG (%.0f ms encode)",
+                humanize.naturalsize(len(result.keyframe), binary=True),
+                result.seconds * 1000,
+            )
+            for stream in keyframe_takers:
+                if stream in self._streams:
+                    stream.send_frame(result.keyframe)
+                    self._needs_keyframe.discard(stream)
+        for owed, streams in delta_takers.items():
+            payload = result.deltas.get(owed)
+            if payload is None:
                 continue
-            if stream in self._backlogged:
-                self._backlogged.discard(stream)
-                self.status.emit(
-                    f"Viewer at {_peer(stream.socket)} caught up — resuming frames"
-                )
-            if stream in self._needs_keyframe or bands is None:
-                if keyframe_png is None:
-                    keyframe_png = frames.encode_image(image, "PNG", frames.PNG_QUALITY)
-                    _log.debug(
-                        "Keyframe: %s PNG",
-                        humanize.naturalsize(len(keyframe_png), binary=True),
-                    )
-                stream.send_frame(keyframe_png)
-                self._needs_keyframe.discard(stream)
-            elif bands:
-                if delta_payload is None:
-                    delta_payload = frames.encode_delta(image, bands)
-                stream.send_delta(delta_payload)
-            # else: nothing changed since the last frame — send nothing.
+            for stream in streams:
+                if stream in self._streams:
+                    stream.send_delta(payload)
+
+    def _log_stats(self, now: float) -> None:
+        """A debug-log line every _STATS_INTERVAL_SECONDS while frames flow:
+        encode timings and flow control, plus each viewer's link estimate."""
+        if self._stats_since is None:
+            self._stats_since = now
+            return
+        if now - self._stats_since < _STATS_INTERVAL_SECONDS:
+            return
+        if self._encodes or self._ticks_skipped or self._frames_withheld:
+            mean_ms = self._encode_seconds / self._encodes * 1000 if self._encodes else 0.0
+            links = ", ".join(
+                f"{_peer(stream.socket)} ~{format_rate(governor.throughput)} "
+                f"cap {humanize.naturalsize(governor.cap, binary=True)}"
+                for stream, governor in self._governors.items()
+            )
+            _log.debug(
+                "Frames: %d encoded in %.0f s (mean %.0f ms, max %.0f ms), "
+                "%d tick(s) skipped while encoding, %d frame(s) withheld for backlog; %s",
+                self._encodes,
+                now - self._stats_since,
+                mean_ms,
+                self._encode_max * 1000,
+                self._ticks_skipped,
+                self._frames_withheld,
+                links or "no viewers",
+            )
+        self._stats_since = now
+        self._encodes = 0
+        self._encode_seconds = 0.0
+        self._encode_max = 0.0
+        self._ticks_skipped = 0
+        self._frames_withheld = 0
 
 
 class ShareClient(QObject):

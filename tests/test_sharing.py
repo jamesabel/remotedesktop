@@ -5,7 +5,7 @@ from PySide6.QtCore import QEventLoop
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtNetwork import QAbstractSocket, QSslSocket
 
-from remotedesktop import db, tls
+from remotedesktop import db, frames, tls
 from remotedesktop.config import KnownServers, PairedClients
 from remotedesktop.protocol import PROTOCOL_VERSION, MessageStream
 from remotedesktop.sharing import ShareClient, ShareServer
@@ -581,19 +581,110 @@ def test_backlogged_viewer_frame_drop_is_reported(qapp, credentials, tmp_path, m
     statuses: list[str] = []
     server.status.connect(statuses.append)
     client = make_client(tmp_path)
-    frames = []
-    client.frameReceived.connect(frames.append)
-    # A negative cap makes every stream count as backlogged, so no frames go out.
-    monkeypatch.setattr("remotedesktop.sharing._MAX_SEND_BACKLOG", -1)
+    received = []
+    client.frameReceived.connect(received.append)
+    # A negative cap makes every stream count as backlogged, so no frames go
+    # out; the status line appears once the stream has stayed behind for
+    # the report delay (brief withholding is routine and stays quiet).
+    monkeypatch.setattr(server, "_send_cap", lambda stream: -1)
     client.connect_to("127.0.0.1", server.port)
     try:
         pump(qapp, lambda: any("not keeping up" in s for s in statuses))
         assert sum("not keeping up" in s for s in statuses) == 1  # reported once, not per frame
-        assert not frames
+        assert not received
         # Once the backlog clears the server says so and frames resume.
-        monkeypatch.setattr("remotedesktop.sharing._MAX_SEND_BACKLOG", 8 * 1024 * 1024)
-        pump(qapp, lambda: frames)
+        monkeypatch.setattr(server, "_send_cap", lambda stream: 8 * 1024 * 1024)
+        pump(qapp, lambda: received)
         assert any("caught up" in s for s in statuses)
+    finally:
+        client.close()
+        server.close()
+
+
+def test_a_viewer_that_fell_behind_catches_up_with_one_merged_delta(
+    qapp, credentials, tmp_path, monkeypatch
+):
+    """Frames withheld from a slow viewer are neither lost nor replaced by a
+    keyframe: the bands it missed accumulate and ship as a single delta once
+    its socket drains."""
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    captures = {"image": solid_image("red")}
+    server._capture = lambda: captures["image"]
+    client = make_client(tmp_path)
+    images, raw_frames, deltas = [], [], []
+    client.frameReceived.connect(images.append)
+    client._stream.frameReceived.connect(raw_frames.append)
+    client._stream.deltaReceived.connect(deltas.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: images)  # the keyframe
+        monkeypatch.setattr(server, "_send_cap", lambda stream: -1)  # the link stalls
+
+        def owed():
+            return next(iter(server._dirty.values()), None)
+
+        first = solid_image("red")
+        painter = QPainter(first)
+        painter.fillRect(0, 0, 64, 64, QColor("blue"))
+        painter.end()
+        captures["image"] = first
+        pump(qapp, lambda: owed() == [(0, 64)])
+        second = first.copy()
+        painter = QPainter(second)
+        painter.fillRect(0, 64, 64, 64, QColor("green"))
+        painter.end()
+        captures["image"] = second
+        pump(qapp, lambda: owed() == [(0, 128)])  # both changes, merged
+        assert not deltas and len(raw_frames) == 1
+
+        monkeypatch.setattr(server, "_send_cap", lambda stream: 8 * 1024 * 1024)
+        pump(qapp, lambda: deltas and len(images) >= 2)
+        assert len(deltas) == 1 and len(raw_frames) == 1  # one delta, no keyframe
+        latest = images[-1]
+        assert latest.pixelColor(5, 5).name() == "#0000ff"
+        assert latest.pixelColor(5, 100).name() == "#008000"
+        assert owed() == []
+    finally:
+        client.close()
+        server.close()
+
+
+def test_ticks_skip_the_capture_while_an_encode_is_in_flight(
+    qapp, credentials, tmp_path, monkeypatch
+):
+    """Encoding runs off the GUI thread; a tick that lands meanwhile skips
+    its capture rather than queue a second job, so a slow encode can only
+    lower the frame rate — never stack up latency."""
+    real_encode = frames.encode_image
+
+    def slow_encode(image, image_format="PNG", quality=-1):
+        time.sleep(0.1)  # ~3 ticks at 30 fps
+        return real_encode(image, image_format, quality)
+
+    monkeypatch.setattr(frames, "encode_image", slow_encode)
+    server = make_server(credentials, tmp_path, approve=lambda *_: True)
+    captured = {"n": 0}
+
+    def capture():  # something changes on every capture
+        captured["n"] += 1
+        image = solid_image("red")
+        painter = QPainter(image)
+        painter.fillRect(0, 64, 64, 64, QColor(captured["n"] % 256, 0, 0))
+        painter.end()
+        return image
+
+    server._capture = capture
+    client = make_client(tmp_path)
+    images = []
+    client.frameReceived.connect(images.append)
+    client.connect_to("127.0.0.1", server.port)
+    try:
+        pump(qapp, lambda: server._ticks_skipped >= 3 and len(images) >= 3, timeout=5.0)
+        # With ~3 ticks per encode, far fewer captures than ticks happened:
+        # the skipped ticks captured nothing and queued nothing.
+        assert captured["n"] < server._ticks_skipped
+        # Every delivered frame is a whole frame the client could decode.
+        assert all(image.width() == 64 for image in images)
     finally:
         client.close()
         server.close()
