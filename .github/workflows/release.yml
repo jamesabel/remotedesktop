@@ -24,7 +24,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Read version
         id: version
         # __init__.py is docstring + __version__ only; exec-ing it avoids
@@ -59,7 +59,7 @@ jobs:
       contents: write # upload the installer to the release
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Install NSIS
         # Not preinstalled on windows-latest; choco puts makensis.exe at
         # C:\Program Files (x86)\NSIS\makensis.exe, pyship's default path.

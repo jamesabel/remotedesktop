@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       # Only the dev group: linting doesn't need PySide6 & co. installed.
       - run: uv sync --only-group dev
       - run: uv run --no-sync ruff check .
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       # ty resolves imports from the project venv; pyproject pins the
       # type-checking platform to win32 (the app's target).
       - run: uv sync
@@ -37,7 +37,7 @@ jobs:
       contents: write # to push the updated coverage badge
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync
       - run: uv run pytest --cov=remotedesktop --cov-report=term
       - name: Publish coverage badge
