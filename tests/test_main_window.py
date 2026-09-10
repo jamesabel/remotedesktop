@@ -1118,6 +1118,135 @@ def test_activating_a_moved_server_migrates_its_retrying_session(qapp, credentia
         server.close()
 
 
+def test_activating_a_multi_homed_server_copies_its_pairing(qapp, credentials, tmp_path):
+    """The server is reachable at both addresses (a session is *connected*
+    at the old one): activating the new address copies the pairing rather
+    than moving it, so neither session loses its token — and a later
+    re-discovery never migrates the old session onto the new one's tab."""
+    server = make_share_server(credentials, tmp_path)
+    window = make_window(tmp_path, reconnect_base_seconds=0.05)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        first = window._sessions[0]
+        pump(qapp, lambda: first.connected)
+        old_key = first.key
+        token = window._known_servers.get(old_key)["token"]
+
+        replacement, moved = _moved_replacement(credentials, tmp_path)
+        try:
+            window._on_server_activated(moved)
+            assert len(window._sessions) == 2
+            second = window._sessions[1]
+            pump(qapp, lambda: second.connected)  # admitted by the copied token
+            new_key = f"127.0.0.1:{replacement.port}"
+            assert (first.key, second.key) == (old_key, new_key)
+            assert first.connected
+            assert window._known_servers.get(old_key)["token"] == token
+            assert window._known_servers.get(new_key)["token"] == token
+            assert old_key in window.client_inventory._peers
+
+            # The old address dies; its re-discovery finds the server at
+            # the new address — where a session already exists, so the old
+            # session keeps its own tab and address.
+            window._rediscover = lambda: [moved]
+            server.close()
+            pump(qapp, lambda: not first.connected)
+            pump(qapp, lambda: first.reconnect_attempts >= 3, timeout=15.0)
+            assert first.key == old_key
+            assert len(window._sessions) == 2
+        finally:
+            replacement.close()
+    finally:
+        window.close()
+        server.close()
+
+
+def test_adopting_a_pairing_needs_a_fingerprint_and_a_free_address(qapp, tmp_path):
+    """The two guards: a server advertising no fingerprint is never matched
+    (the empty string is not a wildcard), and an address that already has
+    its own pairing keeps it."""
+    window = make_window(tmp_path)
+    try:
+        known = window._known_servers
+        known.remember("10.0.0.1:1", "fp-a", "tok-old")
+        known.remember("10.0.0.2:1", "fp-a", "tok-new")
+
+        assert window._adopt_moved_pairing(ServerInfo(name="box", host="10.0.0.3", port=1)) is None
+        assert known.get("10.0.0.3:1") is None
+
+        moved = ServerInfo(name="box", host="10.0.0.2", port=1, fingerprint="fp-a")
+        assert window._adopt_moved_pairing(moved) is None
+        assert known.get("10.0.0.1:1")["token"] == "tok-old"
+        assert known.get("10.0.0.2:1")["token"] == "tok-new"
+        assert "reusing" not in window.connection_log.toPlainText()
+    finally:
+        window.close()
+
+
+def test_rediscovery_starts_only_after_repeated_direct_failures(qapp, credentials, tmp_path):
+    """Re-discovery is not background polling: the first failure just
+    schedules a direct retry; scans begin once the direct address has
+    failed _REDISCOVER_AFTER_ATTEMPTS times, and ride along each backoff."""
+    server = make_share_server(credentials, tmp_path)
+    scans: list[int] = []
+
+    def rediscover():
+        scans.append(1)
+        return []
+
+    window = make_window(tmp_path, reconnect_base_seconds=0.05, rediscover=rediscover)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        server.close()
+        pump(qapp, lambda: session.reconnect_attempts >= 1)
+        assert scans == []  # one drop is not yet "the server moved"
+        pump(qapp, lambda: len(scans) >= 1, timeout=15.0)
+        assert session.reconnect_attempts >= 2
+        pump(qapp, lambda: len(scans) >= 2, timeout=15.0)  # keeps scanning per failure
+        assert not session.connected
+    finally:
+        window.close()
+        server.close()
+
+
+def test_rediscovery_keeps_direct_retries_while_the_address_is_unchanged(
+    qapp, credentials, tmp_path
+):
+    """A scan that finds the server still advertised at the failing address
+    (it's rebooting, not moved) changes nothing: no re-key, no session move."""
+    server = make_share_server(credentials, tmp_path)
+    still_here = ServerInfo(
+        name="box",
+        host="127.0.0.1",
+        port=server.port,
+        fingerprint=tls.certificate_fingerprint(credentials[0]),
+    )
+    scans: list[int] = []
+
+    def rediscover():
+        scans.append(1)
+        return [still_here]
+
+    window = make_window(tmp_path, reconnect_base_seconds=0.05, rediscover=rediscover)
+    try:
+        window._on_server_activated(ServerInfo(name="box", host="127.0.0.1", port=server.port))
+        session = window._sessions[0]
+        pump(qapp, lambda: session.connected)
+        key = session.key
+        token = window._known_servers.get(key)["token"]
+        server.close()
+        pump(qapp, lambda: len(scans) >= 2, timeout=15.0)
+        assert session.key == key
+        assert window._known_servers.get(key)["token"] == token
+        assert key in window.client_inventory._peers
+        assert "new address" not in window.connection_log.toPlainText()
+    finally:
+        window.close()
+        server.close()
+
+
 def test_rediscovery_falls_back_to_the_name_for_old_servers(qapp, credentials, tmp_path):
     # A server too old to advertise a fingerprint is matched by its display
     # name (which a connected session tracks from the welcome message — the

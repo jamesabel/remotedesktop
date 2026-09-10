@@ -239,9 +239,15 @@ discoverable from other machines.
 ## Development
 
 ```
-uv sync          # set up the environment
-uv run pytest    # run the tests
+uv sync              # set up the environment
+uv run pytest        # run the tests
+uv run ruff check .  # lint
+uv run ty check .    # type-check
 ```
+
+All three are required checks on every pull request. `ruff` and `ty` are
+pinned in `uv.lock`; Dependabot opens a weekly PR when newer versions are
+available.
 
 Run the tests from PowerShell or cmd, not Git Bash: Git Bash puts Git's
 MinGW OpenSSL DLLs on `PATH`, which Qt's TLS backend loads and crashes on.
