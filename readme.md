@@ -165,12 +165,26 @@ the pointer you see is always sharp and moves with zero latency.
 **Screen transfer.** Frames are captured at up to 30 fps and compared with
 the previous capture in 64-row bands; only the bands that changed are
 encoded — losslessly, as PNG — and sent as a delta the client patches onto
-its last frame. An unchanged screen sends nothing at all. Full PNG
-keyframes go to clients that just connected, fell behind (a client whose
-socket backlog grows gets frames dropped, then a fresh keyframe once it
-catches up), or asked for one because a delta failed to apply — so a
-desynced stream heals itself. The frame always travels at the server's
-full resolution; scaling to the viewer window happens on the client.
+its last frame. An unchanged screen sends nothing at all. The comparison
+is a C memory compare per band (a few milliseconds for a 4K frame), and
+the PNG encoding — the expensive step — runs on a worker thread, so the
+GUI thread that services the viewers' input never waits on it; a tick
+that arrives mid-encode is simply skipped. Full PNG keyframes go to
+clients that just connected or asked for one because a delta failed to
+apply — so a desynced stream heals itself. The frame always travels at
+the server's full resolution; scaling to the viewer window happens on the
+client.
+
+**Flow control.** Unsent bytes queued in a viewer's socket are latency the
+viewer will see, so each viewer has a cap on how much may be queued before
+frames are withheld from it. The cap adapts to the link: the server
+measures how fast that viewer's socket drains and allows about 50 ms
+worth, starting from a 100 Mbit/s assumption (the app assumes a modern
+LAN — at least 100 Mbit/s, usually a wired gigabit connection) and
+tightening further if the round-trip time rises above its usual floor.
+Withheld frames aren't lost: the bands the viewer missed accumulate and
+ship as one merged delta once it drains, so a slow link gets fewer, larger
+updates instead of a stale picture or a fresh keyframe.
 
 **Input injection.** The client's viewer widget captures your mouse and
 keyboard events, maps mouse positions to coordinates normalized 0..1 over

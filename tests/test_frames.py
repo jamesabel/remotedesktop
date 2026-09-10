@@ -1,6 +1,9 @@
 import json
+import random
 import struct
+import time
 
+from PySide6.QtCore import QEventLoop
 from PySide6.QtGui import QColor, QImage, QPainter
 
 from remotedesktop import frames
@@ -92,3 +95,74 @@ def test_delta_for_a_different_size_is_rejected(qapp):
 def test_malformed_delta_is_rejected(qapp):
     assert frames.apply_delta(solid(32, 32, "red"), b"garbage") is None
     assert frames.apply_delta(solid(32, 32, "red"), b"") is None
+
+
+def test_native_memcmp_is_in_use():
+    # The ~12x faster path; a silent fallback to the Python compare would
+    # put the 4K diff back over the frame budget.
+    assert frames._memcmp is not None
+
+
+def test_memcmp_path_matches_the_python_reference(qapp):
+    rng = random.Random(1)
+    base = solid(64, 1000, "red")  # 16 bands, the last one short (1000 = 15*64 + 40)
+    for _trial in range(25):
+        modified = base.copy()
+        for _change in range(rng.randint(0, 5)):
+            fill_rect(modified, rng.randrange(64), rng.randrange(1000), 1, 1, "blue")
+        expected = frames._changed_bands_python(
+            base.constBits(), modified.constBits(), modified.bytesPerLine(), modified.height()
+        )
+        assert frames.changed_bands(base, modified) == expected
+
+
+def test_merge_bands_unions_and_normalizes(qapp):
+    assert frames.merge_bands([], [(64, 64)], 200) == [(64, 64)]
+    assert frames.merge_bands([(0, 64)], [(64, 64)], 200) == [(0, 128)]
+    assert frames.merge_bands([(0, 128)], [(64, 64), (192, 8)], 200) == [(0, 128), (192, 8)]
+    assert frames.merge_bands([(0, 128)], [(128, 64), (192, 8)], 200) == [(0, 200)]
+    assert frames.merge_bands([(192, 8)], [(0, 64)], 200) == [(0, 64), (192, 8)]
+    assert frames.merge_bands([(0, 64)], [(0, 64)], 200) == [(0, 64)]
+
+
+def wait_for(qapp, condition, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "condition not met"
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+
+
+def test_frame_encoder_runs_off_the_gui_thread(qapp):
+    encoder = frames.FrameEncoder()
+    results = []
+    encoder.encoded.connect(results.append)
+    try:
+        encoder.submit(solid(64, 128, "red"), keyframe=True, deltas=[((64, 64),)])
+        assert encoder.busy
+        wait_for(qapp, lambda: results)
+    finally:
+        encoder.close()
+    (result,) = results
+    assert not encoder.busy and not result.failed
+    assert result.thread.startswith("frame-encoder")
+    assert QImage.fromData(result.keyframe).pixelColor(5, 5).name() == "#ff0000"
+    canvas = solid(64, 128, "blue")
+    assert frames.apply_delta(canvas, result.deltas[((64, 64),)]) is canvas
+    assert canvas.pixelColor(5, 100).name() == "#ff0000"
+    assert canvas.pixelColor(5, 5).name() == "#0000ff"
+
+
+def test_frame_encoder_reports_a_failed_encode(qapp, monkeypatch):
+    def broken(image, image_format="PNG", quality=-1):
+        raise MemoryError("simulated")
+
+    monkeypatch.setattr(frames, "encode_image", broken)
+    encoder = frames.FrameEncoder()
+    results = []
+    encoder.encoded.connect(results.append)
+    try:
+        encoder.submit(solid(64, 128, "red"), keyframe=True, deltas=[])
+        wait_for(qapp, lambda: results)
+    finally:
+        encoder.close()
+    assert results[0].failed and not encoder.busy
