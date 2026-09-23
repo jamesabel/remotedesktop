@@ -19,7 +19,7 @@ On non-Windows platforms this is an inert stub.
 import ctypes
 import struct
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -39,7 +39,9 @@ if _IS_WINDOWS:
 
 def wants_no_console(executable: str) -> bool:
     """True when the app runs under an interpreter meant to be windowless."""
-    return Path(executable).name.lower() == "pythonw.exe"
+    # PureWindowsPath: a Windows path parses the same on any OS (Path would not split
+    # on backslashes off Windows)
+    return PureWindowsPath(executable).name.lower() == "pythonw.exe"
 
 
 def is_console_program(exe: Path) -> bool:
