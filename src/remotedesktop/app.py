@@ -49,6 +49,7 @@ from remotedesktop.about import AboutDialog
 from remotedesktop.autostart import Autostart, installed_launcher
 from remotedesktop.client import DiscoveryPanel, ServerSession, _broadcast_hosts
 from remotedesktop.clipboard import ClipboardSync
+from remotedesktop.crash_report import CrashReporter
 from remotedesktop.config import KnownServers, Settings, default_db_path, load_client_identity
 from remotedesktop.discovery import (
     DEFAULT_CONNECT_PORT,
@@ -1606,6 +1607,10 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     minimized = "--minimized" in sys.argv[1:]
     maximized = "--maximized" in sys.argv[1:]
     log_path = logs.init_logging("remotedesktop")
+    # A windowless (pythonw) start has no console: log unhandled exceptions,
+    # and say so in a message box when one stops the app.
+    crashes = CrashReporter(log_path)
+    crashes.install()
     if console_window.hide_unwanted_console():
         _log.warning("Started as pythonw but had a console window; hid it (rebuild the venv)")
     icon.set_windows_app_id("remotedesktop")
@@ -1631,7 +1636,10 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
         window.showMaximized()
     else:
         window.show()
-    raise SystemExit(app.exec())
+    crashes.fatal = False  # in the event loop, a slot error doesn't stop the app
+    exit_code = app.exec()
+    crashes.fatal = True
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":  # pragma: no cover
