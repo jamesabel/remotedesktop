@@ -1,8 +1,9 @@
 import base64
 from pathlib import Path
+from typing import cast
 
-from PySide6.QtCore import QBuffer, QMimeData, QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QBuffer, QMimeData, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QClipboard, QImage
 
 from remotedesktop import clipboard as clipboard_module
 from remotedesktop.clipboard import ClipboardSync
@@ -25,6 +26,50 @@ class FakeClipboard(QObject):
 
     def local_copy(self, payload: dict) -> None:
         self.changed.emit(payload)
+
+
+class FakeOsClipboard(QObject):
+    """Stand-in for QClipboard, so ClipboardSync unit tests never touch the
+    real Windows clipboard — a machine-wide resource that other processes
+    (a concurrent test run, the live app, clipboard managers) can overwrite
+    or hold open mid-test. Like Windows, `dataChanged` fires asynchronously
+    (on the next event-loop pass), which is what makes ClipboardSync's
+    signature-based echo prevention necessary."""
+
+    dataChanged = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._mime = QMimeData()
+
+    def mimeData(self) -> QMimeData:
+        return self._mime
+
+    def setMimeData(self, mime: QMimeData) -> None:
+        self._mime = mime
+        QTimer.singleShot(0, self, self.dataChanged.emit)
+
+    def text(self) -> str:
+        return self._mime.text()
+
+    def setText(self, text: str) -> None:
+        mime = QMimeData()
+        mime.setText(text)
+        self.setMimeData(mime)
+
+    def image(self) -> QImage:
+        data = self._mime.imageData()
+        return QImage(data) if isinstance(data, QImage) else QImage()
+
+    def setImage(self, image: QImage) -> None:
+        mime = QMimeData()
+        mime.setImageData(image)
+        self.setMimeData(mime)
+
+
+def fake_os_clipboard() -> QClipboard:
+    """A FakeOsClipboard, typed as the QClipboard it duck-types for."""
+    return cast(QClipboard, FakeOsClipboard())
 
 
 def connected_pair(qapp, credentials, tmp_path, server_cb, client_cb):
@@ -94,11 +139,11 @@ def test_large_clipboard_passes_after_pairing(qapp, credentials, tmp_path):
         server.close()
 
 
-# --- ClipboardSync unit tests against the real QClipboard (single process) ---
+# --- ClipboardSync unit tests against FakeOsClipboard (never the real one) ---
 
 
 def test_sync_emits_on_local_change(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
@@ -108,7 +153,7 @@ def test_sync_emits_on_local_change(qapp):
 
 
 def test_apply_does_not_echo_back(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
@@ -127,7 +172,7 @@ def _red_image() -> QImage:
 
 
 def test_local_image_copy_is_encoded_as_png(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
@@ -139,7 +184,7 @@ def test_local_image_copy_is_encoded_as_png(qapp):
 
 
 def test_apply_image_payload_sets_clipboard_image(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     buffer = QBuffer()
     buffer.open(QBuffer.OpenModeFlag.WriteOnly)
@@ -160,7 +205,7 @@ def test_apply_image_payload_sets_clipboard_image(qapp):
 
 
 def test_copy_image_sets_clipboard_without_echoing_to_peers(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
@@ -174,7 +219,7 @@ def test_copy_image_sets_clipboard_without_echoing_to_peers(qapp):
 
 def test_copy_image_works_with_sync_disabled(qapp):
     # The Preferences toggle governs syncing; a local capture copy is not sync.
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     sync.enabled = False
     blue = QImage(4, 4, QImage.Format.Format_RGB32)
@@ -184,7 +229,7 @@ def test_copy_image_works_with_sync_disabled(qapp):
 
 
 def test_apply_ignores_garbage_payloads(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     clip.setText("before")
     for _ in range(10):
         qapp.processEvents()
@@ -196,7 +241,7 @@ def test_apply_ignores_garbage_payloads(qapp):
 
 
 def test_data_changed_while_applying_is_ignored(qapp):
-    sync = ClipboardSync(qapp.clipboard())
+    sync = ClipboardSync(fake_os_clipboard())
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
     sync._applying = True
@@ -220,27 +265,30 @@ def test_describe_payload_summarizes_kinds_and_sizes():
 # --- file sync ---
 
 
-def _copy_files(qapp, clip, paths) -> None:
-    """Put local-file URLs on the real clipboard, like an Explorer copy."""
+def _copy_files(clip, paths) -> None:
+    """Put local-file URLs on the clipboard, like an Explorer copy."""
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(p)) for p in paths])
     clip.setMimeData(mime)
 
 
-def make_file_sync(qapp, tmp_path) -> tuple[ClipboardSync, list[dict], list[str]]:
-    sync = ClipboardSync(qapp.clipboard(), files_dir=tmp_path / "received")
+def make_file_sync(
+    tmp_path,
+) -> tuple[QClipboard, ClipboardSync, list[dict], list[str]]:
+    clip = fake_os_clipboard()
+    sync = ClipboardSync(clip, files_dir=tmp_path / "received")
     emitted: list[dict] = []
     statuses: list[str] = []
     sync.changed.connect(emitted.append)
     sync.status.connect(statuses.append)
-    return sync, emitted, statuses
+    return clip, sync, emitted, statuses
 
 
 def test_file_copy_ships_names_and_contents(qapp, tmp_path):
-    sync, emitted, statuses = make_file_sync(qapp, tmp_path)
+    clip, sync, emitted, statuses = make_file_sync(tmp_path)
     (tmp_path / "a.txt").write_bytes(b"alpha")
     (tmp_path / "b.bin").write_bytes(b"\x00\x01\x02")
-    _copy_files(qapp, qapp.clipboard(), [tmp_path / "a.txt", tmp_path / "b.bin"])
+    _copy_files(clip, [tmp_path / "a.txt", tmp_path / "b.bin"])
     pump(qapp, lambda: emitted)
     payload = emitted[-1]
     files = {f["name"]: base64.b64decode(f["data"]) for f in payload["files"]}
@@ -253,32 +301,32 @@ def test_file_copy_ships_names_and_contents(qapp, tmp_path):
 
 def test_file_copy_over_the_cap_is_skipped_with_a_message(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(clipboard_module, "FILES_CAP_BYTES", 4)
-    sync, emitted, statuses = make_file_sync(qapp, tmp_path)
+    clip, sync, emitted, statuses = make_file_sync(tmp_path)
     (tmp_path / "big.dat").write_bytes(b"x" * 100)
-    _copy_files(qapp, qapp.clipboard(), [tmp_path / "big.dat"])
+    _copy_files(clip, [tmp_path / "big.dat"])
     pump(qapp, lambda: statuses)
     assert any("exceeds the" in s for s in statuses)
     assert emitted == []
 
 
 def test_folders_are_skipped_files_still_sync(qapp, tmp_path):
-    sync, emitted, statuses = make_file_sync(qapp, tmp_path)
+    clip, sync, emitted, statuses = make_file_sync(tmp_path)
     (tmp_path / "folder").mkdir()
     (tmp_path / "keep.txt").write_bytes(b"kept")
-    _copy_files(qapp, qapp.clipboard(), [tmp_path / "folder", tmp_path / "keep.txt"])
+    _copy_files(clip, [tmp_path / "folder", tmp_path / "keep.txt"])
     pump(qapp, lambda: emitted)
     assert [f["name"] for f in emitted[-1]["files"]] == ["keep.txt"]
     assert any("folder(s) skipped" in s for s in statuses)
 
 
 def test_apply_files_materializes_and_does_not_echo(qapp, tmp_path):
-    sync, emitted, statuses = make_file_sync(qapp, tmp_path)
+    clip, sync, emitted, statuses = make_file_sync(tmp_path)
     payload = {
         "type": "clipboard",
         "files": [{"name": "doc.txt", "data": base64.b64encode(b"remote").decode()}],
     }
     sync.apply(payload)
-    mime = qapp.clipboard().mimeData()
+    mime = clip.mimeData()
     assert mime.hasUrls()
     written = [u.toLocalFile() for u in mime.urls()]
     assert len(written) == 1 and written[0].endswith("doc.txt")
@@ -293,7 +341,7 @@ def test_apply_files_materializes_and_does_not_echo(qapp, tmp_path):
 
 
 def test_apply_sanitizes_names_and_dedupes(qapp, tmp_path):
-    sync, _, _ = make_file_sync(qapp, tmp_path)
+    clip, sync, _unused_emitted, _unused_statuses = make_file_sync(tmp_path)
     data = base64.b64encode(b"x").decode()
     sync.apply(
         {
@@ -307,21 +355,19 @@ def test_apply_sanitizes_names_and_dedupes(qapp, tmp_path):
             ],
         }
     )
-    written = sorted(
-        Path(u.toLocalFile()).name for u in qapp.clipboard().mimeData().urls()
-    )
+    written = sorted(Path(u.toLocalFile()).name for u in clip.mimeData().urls())
     assert written == ["evil (2).txt", "evil.txt"]
-    batch_dir = Path(qapp.clipboard().mimeData().urls()[0].toLocalFile()).parent
+    batch_dir = Path(clip.mimeData().urls()[0].toLocalFile()).parent
     assert batch_dir.parent == tmp_path / "received"  # nothing escaped the batch
 
 
 def test_next_batch_purges_the_previous_one(qapp, tmp_path):
-    sync, _, _ = make_file_sync(qapp, tmp_path)
+    clip, sync, _unused_emitted, _unused_statuses = make_file_sync(tmp_path)
     data = base64.b64encode(b"x").decode()
     sync.apply({"type": "clipboard", "files": [{"name": "one.txt", "data": data}]})
-    first = Path(qapp.clipboard().mimeData().urls()[0].toLocalFile()).parent
+    first = Path(clip.mimeData().urls()[0].toLocalFile()).parent
     sync.apply({"type": "clipboard", "files": [{"name": "two.txt", "data": data}]})
-    second = Path(qapp.clipboard().mimeData().urls()[0].toLocalFile()).parent
+    second = Path(clip.mimeData().urls()[0].toLocalFile()).parent
     assert not first.exists()  # only the newest batch is kept
     assert (second / "two.txt").exists()
 
@@ -329,9 +375,9 @@ def test_next_batch_purges_the_previous_one(qapp, tmp_path):
 def test_file_round_trip_does_not_loop(qapp, tmp_path):
     # A applies what B copied; A's own dataChanged (temp paths) must not
     # re-emit — signatures hash names + contents, never paths.
-    sync, emitted, _ = make_file_sync(qapp, tmp_path)
+    clip, sync, emitted, _unused_statuses = make_file_sync(tmp_path)
     (tmp_path / "orig.txt").write_bytes(b"payload")
-    _copy_files(qapp, qapp.clipboard(), [tmp_path / "orig.txt"])
+    _copy_files(clip, [tmp_path / "orig.txt"])
     pump(qapp, lambda: emitted)
     sent = emitted[-1]
     emitted.clear()
@@ -355,7 +401,7 @@ def test_file_payload_crosses_the_wire(qapp, credentials, tmp_path):
 
 
 def test_disabled_sync_neither_sends_nor_applies(qapp):
-    clip = qapp.clipboard()
+    clip = fake_os_clipboard()
     sync = ClipboardSync(clip)
     emitted: list[dict] = []
     sync.changed.connect(emitted.append)
