@@ -67,7 +67,7 @@ Managed with `uv` (hatchling build backend, src layout):
 - `uv sync` — create/update the venv with the project and dev dependencies
 - `uv run pytest` — run all tests
 - `uv run pytest tests/test_smoke.py::test_version` — run a single test
-- `uv run remotedesktop` — launch the app. It's a `gui-script`, so it runs detached with no console output; use `uv run python -m remotedesktop` when you need stdout/tracebacks. `--minimized` starts hidden in the tray when sharing is on, otherwise minimized to the taskbar (the default autostart registration passes it); `--maximized` starts maximized.
+- `uv run remotedesktop` — launch the app. It's a `gui-script` (runs under `pythonw.exe`; if a broken venv — uv 0.11 made `Scripts\pythonw.exe` a console copy — still gives it a console, `console_window.hide_unwanted_console()` in `main()` hides it, or minimizes it under Windows Terminal, which ignores hide; rebuilding the venv is the real fix), so it runs detached with no console output; use `uv run python -m remotedesktop` when you need stdout/tracebacks. `--minimized` starts hidden in the tray when sharing is on, otherwise minimized to the taskbar (the default autostart registration passes it); `--maximized` starts maximized.
 - `uv build` — build sdist and wheel into `dist/`
 - `uv publish` — publish to PyPI
 - `scripts\make_installer.bat` — build the **signed Windows installer** with pyship
