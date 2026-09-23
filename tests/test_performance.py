@@ -331,7 +331,7 @@ def test_old_peer_leaves_rtt_series_empty(qapp, credentials, tmp_path):
     client.frameReceived.connect(frames.append)
     client.connect_to("127.0.0.1", server.port)
     try:
-        pump(qapp, lambda: len(client_perf.recv_bps.samples()) >= 2)
+        pump(qapp, lambda: len(client_perf.recv_bps.samples()) >= 2 and frames)
         assert client_perf.rtt_ms.latest() is None
         assert client_perf.peer_rtt_ms.latest() is None
         assert frames  # unanswered pings don't harm the connection
