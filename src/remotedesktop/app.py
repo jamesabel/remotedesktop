@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import __version__, compat, db, icon, logs, window_state
+from remotedesktop import __version__, compat, console_window, db, icon, logs, window_state
 from remotedesktop.about import AboutDialog
 from remotedesktop.autostart import Autostart, installed_launcher
 from remotedesktop.client import DiscoveryPanel, ServerSession, _broadcast_hosts
@@ -1606,6 +1606,8 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     minimized = "--minimized" in sys.argv[1:]
     maximized = "--maximized" in sys.argv[1:]
     log_path = logs.init_logging("remotedesktop")
+    if console_window.hide_unwanted_console():
+        _log.warning("Started as pythonw but had a console window; hid it (rebuild the venv)")
     icon.set_windows_app_id("remotedesktop")
     app = QApplication(sys.argv)
     app.setWindowIcon(icon.app_icon("app"))
