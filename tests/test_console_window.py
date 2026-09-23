@@ -4,10 +4,29 @@ All tests here are AI-authored. The Win32 calls are faked (the `win32`
 fixture), so no test can hide or minimize the terminal running pytest.
 """
 
+import struct
+import sys
+from pathlib import Path
+
 import pytest
 
 from remotedesktop import console_window
-from remotedesktop.console_window import hide_unwanted_console, wants_no_console
+from remotedesktop.console_window import (
+    broken_pythonw,
+    hide_unwanted_console,
+    is_console_program,
+    wants_no_console,
+)
+
+
+def _pe_image(subsystem: int, pe_offset: int = 0x80) -> bytes:
+    """A minimal PE header: just enough for the subsystem field to be read."""
+    image = bytearray(pe_offset + 24 + 68 + 2)
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3C, pe_offset)
+    image[pe_offset : pe_offset + 4] = b"PE\0\0"
+    struct.pack_into("<H", image, pe_offset + 24 + 68, subsystem)
+    return bytes(image)
 
 
 class _FakeKernel32:
@@ -83,3 +102,53 @@ def test_inert_off_windows(win32, monkeypatch):
     monkeypatch.setattr(console_window, "_IS_WINDOWS", False)
     assert hide_unwanted_console(r"C:\venv\Scripts\pythonw.exe") is False
     assert user32.calls == []
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.mark.parametrize(("subsystem", "expected"), [(3, True), (2, False)])
+def test_is_console_program_reads_the_pe_subsystem(tmp_path, subsystem, expected):
+    exe = tmp_path / "pythonw.exe"
+    exe.write_bytes(_pe_image(subsystem))
+    assert is_console_program(exe) is expected
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",  # empty
+        b"not an executable" * 10,  # no MZ
+        _pe_image(3)[:0x90],  # truncated before the subsystem field
+        _pe_image(3).replace(b"PE\0\0", b"XX\0\0"),  # bad PE signature
+    ],
+)
+def test_is_console_program_is_false_for_non_pe_files(tmp_path, content):
+    exe = tmp_path / "pythonw.exe"
+    exe.write_bytes(content)
+    assert is_console_program(exe) is False
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+def test_is_console_program_is_false_for_a_missing_file(tmp_path):
+    assert is_console_program(tmp_path / "missing.exe") is False
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.mark.skipif(sys.platform != "win32", reason="real Windows interpreters")
+def test_is_console_program_on_the_real_interpreters():
+    base = Path(sys.base_prefix)  # the real CPython install, not a venv shim
+    assert is_console_program(base / "python.exe") is True
+    assert is_console_program(base / "pythonw.exe") is False
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.mark.parametrize(("subsystem", "broken"), [(3, True), (2, False)])
+def test_broken_pythonw_checks_the_sibling_pythonw(tmp_path, subsystem, broken):
+    (tmp_path / "pythonw.exe").write_bytes(_pe_image(subsystem))
+    expected = tmp_path / "pythonw.exe" if broken else None
+    assert broken_pythonw(str(tmp_path / "python.exe")) == expected
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+def test_broken_pythonw_is_none_without_a_pythonw(tmp_path):
+    assert broken_pythonw(str(tmp_path / "python.exe")) is None

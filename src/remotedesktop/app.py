@@ -1611,8 +1611,7 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     # and say so in a message box when one stops the app.
     crashes = CrashReporter(log_path)
     crashes.install()
-    if console_window.hide_unwanted_console():
-        _log.warning("Started as pythonw but had a console window; hid it (rebuild the venv)")
+    hid_console = console_window.hide_unwanted_console()
     icon.set_windows_app_id("remotedesktop")
     app = QApplication(sys.argv)
     app.setWindowIcon(icon.app_icon("app"))
@@ -1626,6 +1625,17 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     window = MainWindow()
     guard.activateRequested.connect(window.bring_to_front)
     window.log(f"Detailed log: {log_path}")
+    # A broken venv (uv 0.11) opens a console window at every windowless
+    # launch, login autostart included — say so where the user will see it.
+    if hid_console:
+        window.log("Started as pythonw but had a console window; hid it")
+    pythonw = console_window.broken_pythonw()
+    if pythonw is not None:
+        window.log(
+            f"{pythonw} is a console program, so a console window opens whenever "
+            "the app starts (including at login): quit the app, delete .venv and "
+            "run uv sync"
+        )
     if minimized and window.sharing_tab.serving and window._tray is not None:
         # Login-started while sharing: live in the tray until summoned.
         window._tray_notified = True  # no balloon for a start nobody clicked
