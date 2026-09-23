@@ -6,7 +6,7 @@ fixture), so no test can hide or minimize the terminal running pytest.
 
 import struct
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -68,6 +68,15 @@ def win32(monkeypatch):
 )
 def test_wants_no_console_only_for_pythonw(executable, expected):
     assert wants_no_console(executable) is expected
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+def test_wants_no_console_parses_windows_paths_off_windows(monkeypatch):
+    # A POSIX Path doesn't split on backslashes, so its name would be the whole
+    # string; the check must not depend on the host's Path flavour.
+    monkeypatch.setattr(console_window, "Path", PurePosixPath)
+    assert wants_no_console(r"C:\proj\.venv\Scripts\pythonw.exe") is True
+    assert wants_no_console(r"C:\proj\.venv\Scripts\python.exe") is False
 
 
 # AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
