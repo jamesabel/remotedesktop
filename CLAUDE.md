@@ -37,8 +37,10 @@ to `src/remotedesktop/__init__.py`, the only place the version lives)
 triggers `.github/workflows/release.yml`, which tags `v<version>` and
 creates a GitHub release with generated notes and the built sdist/wheel
 attached. It is idempotent (skips if the release exists) and can be run
-manually via workflow_dispatch. PyPI publishing stays manual (`uv publish`),
-only on the user's explicit request.
+manually via workflow_dispatch. PyPI publishing stays manual,
+only on the user's explicit request: run `.github/workflows/publish.yml`
+(workflow_dispatch), which uploads with Provenance through a PyPI trusted
+publisher. Never `uv publish` from a workstation; that cannot produce Provenance.
 
 The same workflow's `installer` job (windows-latest) builds the **pyship
 installer** (`uv run --group ship python -m pyship --noupload`) and attaches
@@ -69,7 +71,7 @@ Managed with `uv` (hatchling build backend, src layout):
 - `uv run pytest tests/test_smoke.py::test_version` — run a single test
 - `uv run remotedesktop` — launch the app. It's a `gui-script` (runs under `pythonw.exe`; if a broken venv — uv 0.11 made `Scripts\pythonw.exe` a console copy — still gives it a console, `console_window.hide_unwanted_console()` in `main()` hides it, or minimizes it under Windows Terminal, which ignores hide; rebuilding the venv is the real fix, and `console_window.broken_pythonw()` — a PE-header subsystem check — makes `main()` say so in the Connection log), so it runs detached with no console output; use `uv run python -m remotedesktop` when you need stdout/tracebacks. `--minimized` starts hidden in the tray when sharing is on, otherwise minimized to the taskbar (the default autostart registration passes it); `--maximized` starts maximized.
 - `uv build` — build sdist and wheel into `dist/`
-- `uv publish` — publish to PyPI
+- `gh workflow run publish.yml` — publish to PyPI with Provenance (explicit request only; never `uv publish` locally)
 - `scripts\make_installer.bat` — build the **signed Windows installer** with pyship
   (`installers\remotedesktop_installer_win64.exe`). Needs the hardware signing token and a
   local console session (pyship refuses token signing over RDP); set
