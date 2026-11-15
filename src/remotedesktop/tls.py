@@ -9,6 +9,8 @@ off and identity is enforced by the pinned fingerprint instead.
 """
 
 import datetime
+import logging
+import sys
 from pathlib import Path
 
 from cryptography import x509
@@ -17,6 +19,36 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from PySide6.QtCore import QCryptographicHash
 from PySide6.QtNetwork import QSsl, QSslCertificate, QSslConfiguration, QSslKey, QSslSocket
+
+_log = logging.getLogger("remotedesktop.tls")
+
+# The Windows-native TLS backend, and the only one this app is tested with.
+BACKEND = "schannel"
+
+
+def select_backend() -> bool:
+    """Pin Qt's TLS backend to schannel; return whether it is now active.
+
+    Left to itself Qt prefers its openssl backend whenever OpenSSL DLLs can be
+    found on PATH (Git for Windows puts its own there, as do other tools), and
+    against a foreign OpenSSL build that backend crashes with an access
+    violation on the first TLS connection. Qt allows one backend per process,
+    chosen before the first QSslSocket, QSslCertificate or QSslKey is used, so
+    call this once at startup, before any of them.
+
+    Off Windows there is no schannel and this does nothing.
+    """
+    if sys.platform != "win32":
+        return False
+    if not QSslSocket.setActiveBackend(BACKEND):
+        _log.error(
+            "could not select the %s TLS backend (active: %s, available: %s)",
+            BACKEND,
+            QSslSocket.activeBackend(),
+            ", ".join(QSslSocket.availableBackends()),
+        )
+        return False
+    return True
 
 
 def generate_self_signed(common_name: str = "remotedesktop") -> tuple[bytes, bytes]:

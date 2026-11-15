@@ -81,6 +81,17 @@ def _close_db_connections(monkeypatch):
         connection.close()
 
 
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.fixture(scope="session", autouse=True)
+def _tls_backend():
+    """Run every test on the TLS backend the app pins at startup (schannel).
+
+    Without this a test run started where OpenSSL DLLs are on PATH (Git Bash)
+    gets Qt's openssl backend and access-violates on the first TLS connection.
+    """
+    tls.select_backend()
+
+
 @pytest.fixture(scope="session")
 def credentials(qapp):
     """One self-signed cert/key reused across tests (generation is ~100ms)."""
