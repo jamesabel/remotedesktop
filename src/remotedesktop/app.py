@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from remotedesktop import __version__, compat, console_window, db, icon, logs, window_state
+from remotedesktop import __version__, compat, console_window, db, icon, logs, tls, window_state
 from remotedesktop.about import AboutDialog
 from remotedesktop.autostart import Autostart, installed_launcher
 from remotedesktop.client import DiscoveryPanel, ServerSession, _broadcast_hosts
@@ -1611,6 +1611,8 @@ def main() -> None:  # pragma: no cover - runs the Qt event loop
     # and say so in a message box when one stops the app.
     crashes = CrashReporter(log_path)
     crashes.install()
+    # Before anything touches TLS: never let OpenSSL DLLs on PATH pick the backend.
+    tls.select_backend()
     hid_console = console_window.hide_unwanted_console()
     icon.set_windows_app_id("remotedesktop")
     app = QApplication(sys.argv)

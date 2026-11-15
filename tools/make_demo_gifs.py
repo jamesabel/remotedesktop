@@ -216,6 +216,7 @@ def save_gif(frames: list[Image.Image], path: Path) -> None:
 def main() -> None:
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("docs/media")
     out_dir.mkdir(parents=True, exist_ok=True)
+    tls.select_backend()  # as app.main() does, before any TLS use
     app = QApplication(sys.argv)
 
     # Everything below is synthetic: names, users, databases, screen content.
