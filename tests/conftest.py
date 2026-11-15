@@ -85,3 +85,42 @@ def _close_db_connections(monkeypatch):
 def credentials(qapp):
     """One self-signed cert/key reused across tests (generation is ~100ms)."""
     return tls.ephemeral_credentials()
+
+
+# AI-GENERATED TEST (Claude Code) - delete this line to make this test human-owned.
+@pytest.fixture(autouse=True)
+def unanswered_dialogs(monkeypatch):
+    """Keep a modal dialog that no test stubbed from blocking the run.
+
+    A real QMessageBox.question, QMessageBox.exec or
+    QFileDialog.getSaveFileName waits for a person. In CI nobody answers, so
+    the job sits until the runner's limit: a failing loopback test once held
+    the test job for six hours, because its cleanup closed a window with a
+    viewer still connected, which asks "Quit?".
+
+    Here such a dialog is declined at once (No / cancelled) and recorded, and
+    the test then fails at teardown naming it. A test that expects a dialog
+    stubs it with monkeypatch as before, which replaces these stand-ins.
+    Yields the list of recorded dialogs.
+    """
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    unanswered: list[str] = []
+
+    def question(_parent=None, title="", text="", *_args, **_kwargs):
+        unanswered.append(f"QMessageBox.question: {title}: {text}")
+        return QMessageBox.StandardButton.No
+
+    def message_box_exec(box):
+        unanswered.append(f"QMessageBox.exec: {box.windowTitle()}: {box.text()}")
+        return QMessageBox.StandardButton.No
+
+    def get_save_file_name(_parent=None, caption="", *_args, **_kwargs):
+        unanswered.append(f"QFileDialog.getSaveFileName: {caption}")
+        return "", ""
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(question))
+    monkeypatch.setattr(QMessageBox, "exec", message_box_exec)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(get_save_file_name))
+    yield unanswered
+    assert not unanswered, f"modal dialog(s) shown with nobody to answer: {unanswered}"
