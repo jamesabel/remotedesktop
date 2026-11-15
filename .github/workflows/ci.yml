@@ -33,6 +33,9 @@ jobs:
     # The app targets Windows: input injection, schannel TLS, and the GUI
     # tests all assume it.
     runs-on: windows-latest
+    # The suite takes about three minutes. Without a limit a hung test (a modal
+    # dialog nobody answers, say) holds the job for the six-hour default.
+    timeout-minutes: 20
     permissions:
       contents: write # to push the updated coverage badge
     steps:
